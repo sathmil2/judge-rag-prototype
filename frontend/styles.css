@@ -247,6 +247,7 @@ h2 {
 
 #answerText {
   line-height: 1.65;
+  white-space: pre-line;
 }
 
 .validation-status,

@@ -4,6 +4,7 @@ import os
 import json
 import urllib.error
 import urllib.request
+from collections import defaultdict
 from dataclasses import dataclass
 
 
@@ -40,16 +41,8 @@ def generate_extractive_answer(question: str, citations: list[dict], source_filt
             warnings=[],
         )
 
-    lead = answer_lead(source_filter)
-    snippets = []
-    for citation in citations[:3]:
-        source_name = citation.get("sourceLabel") or citation.get("documentTitle", "source")
-        snippet = " ".join(citation.get("snippet", "").split())
-        if snippet:
-            snippets.append(f"{source_name}: {snippet}")
-
     return AnswerResult(
-        answer=f"{lead} " + " ".join(snippets),
+        answer=build_clean_extractive_answer(citations, source_filter),
         provider="extractive",
         status="complete",
         warnings=[
@@ -115,6 +108,7 @@ def build_responses_payload(model: str, question: str, citations: list[dict]) ->
         "instructions": (
             "You are a court-document assistant. Answer only from the provided cited sources. "
             "Do not use outside knowledge. If the sources do not support an answer, say that the provided sources do not answer the question. "
+            "Use this format: Direct answer, Supporting details, Sources used. "
             "Keep the answer concise. Include bracketed source labels like [C1] after factual claims."
         ),
         "input": [
@@ -202,6 +196,101 @@ def llm_fallback(provider: str, question: str, citations: list[dict], warning: s
     fallback.status = "fallback"
     fallback.warnings.append(f"{warning} Used extractive answer generation instead.")
     return fallback
+
+
+def build_clean_extractive_answer(citations: list[dict], source_filter: str) -> str:
+    unique_citations = relevant_citations(dedupe_citations(citations))
+    grouped = group_citations(unique_citations[:5])
+    direct = direct_answer_from_citations(unique_citations, source_filter)
+    lines = [
+        "Direct answer",
+        direct,
+        "",
+        "Supporting details",
+    ]
+
+    for source_type, items in grouped.items():
+        lines.append(f"{source_heading(source_type)}:")
+        for citation in items[:3]:
+            label = citation.get("sourceLabel") or citation.get("documentTitle", "source")
+            snippet = compact_snippet(citation.get("snippet", ""))
+            lines.append(f"- {snippet} [{label}]")
+
+    lines.extend([
+        "",
+        "Sources used",
+        ", ".join(citation.get("sourceLabel") or citation.get("documentTitle", "source") for citation in unique_citations[:5]),
+    ])
+    return "\n".join(lines)
+
+
+def relevant_citations(citations: list[dict]) -> list[dict]:
+    if not citations:
+        return citations
+    max_score = max(float(citation.get("score", 0.0) or 0.0) for citation in citations)
+    if max_score <= 0:
+        return citations
+    cutoff = max_score * 0.25
+    filtered = [
+        citation for citation in citations
+        if float(citation.get("score", 0.0) or 0.0) >= cutoff
+    ]
+    return filtered or citations[:3]
+
+
+def dedupe_citations(citations: list[dict]) -> list[dict]:
+    seen: set[tuple[str, str, str]] = set()
+    unique = []
+    for citation in citations:
+        key = (
+            citation.get("sourceType", ""),
+            citation.get("sourceLabel", ""),
+            compact_snippet(citation.get("snippet", ""))[:120],
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(citation)
+    return unique
+
+
+def group_citations(citations: list[dict]) -> dict[str, list[dict]]:
+    grouped: dict[str, list[dict]] = defaultdict(list)
+    for citation in citations:
+        grouped[citation.get("sourceType", "source")].append(citation)
+    return dict(grouped)
+
+
+def direct_answer_from_citations(citations: list[dict], source_filter: str) -> str:
+    if not citations:
+        return "The retrieved sources do not support an answer."
+
+    source_phrase = {
+        "documents": "the retrieved case document pages",
+        "events": "the retrieved docket events",
+        "law": "the retrieved legal references",
+    }.get(source_filter, "the retrieved sources")
+
+    top_snippet = compact_snippet(citations[0].get("snippet", ""))
+    top_label = citations[0].get("sourceLabel") or citations[0].get("documentTitle", "source")
+    return f"Based on {source_phrase}, the strongest supporting source says: {top_snippet} [{top_label}]"
+
+
+def source_heading(source_type: str) -> str:
+    if source_type == "case document":
+        return "Case documents"
+    if source_type == "docket event":
+        return "Docket events"
+    if source_type == "legal reference":
+        return "Legal references"
+    return "Other sources"
+
+
+def compact_snippet(text: str, limit: int = 260) -> str:
+    compacted = " ".join(str(text).split())
+    if len(compacted) <= limit:
+        return compacted
+    return compacted[:limit].rsplit(" ", 1)[0] + "..."
 
 
 def answer_lead(source_filter: str) -> str:
