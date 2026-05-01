@@ -160,21 +160,6 @@ def score_record(record: dict, terms: list[str], phrases: list[str], dates: list
     return score, list(dict.fromkeys(matched_terms))
 
 
-def summarize_answer(results: list[SearchResult]) -> str:
-    if not results:
-        return "I could not find a cited source for that in the uploaded case documents or docket events."
-
-    snippets = []
-    for result in results[:3]:
-        text = " ".join(result.source["chunkText"].split())
-        snippets.append(text[:280] + ("..." if len(text) > 280 else ""))
-
-    return (
-        "Based on the retrieved case records, the most relevant source text says: "
-        + " ".join(snippets)
-    )
-
-
 def build_citations(results: list[SearchResult]) -> list[dict]:
     citations = []
     for result in results:

@@ -15,8 +15,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
+from answer import generate_answer
 from ocr import extract_document
-from search import build_citations, retrieve_sources, summarize_answer
+from search import build_citations, retrieve_sources
 from validation import strip_internal_source_text, validate_citations
 
 
@@ -314,29 +315,33 @@ class Handler(BaseHTTPRequestHandler):
 
         index = read_index()
         results = retrieve_sources(index, question, case_number, source_filter)
-        answer = summarize_answer(results)
         citations = build_citations(results)
         validation = validate_citations(citations)
+        answer_result = generate_answer(question, citations, source_filter)
         public_citations = strip_internal_source_text(citations)
 
         if validation["status"] != "passed":
-            answer = "I could not produce a validated answer with cited source support."
+            answer_result.answer = "I could not produce a validated answer with cited source support."
+            answer_result.status = validation["status"]
 
         index["auditLog"].append({
             "timestamp": int(time.time()),
             "caseNumber": case_number,
             "question": question,
             "sourceFilter": source_filter,
+            "answerProvider": answer_result.provider,
+            "answerStatus": answer_result.status,
             "citations": public_citations,
             "validation": validation,
         })
         write_index(index)
 
         self.send_json({
-            "answer": answer,
+            "answer": answer_result.answer,
+            "answerMeta": answer_result.to_dict(),
             "citations": public_citations,
             "validation": validation,
-            "mode": "modular-keyword-search",
+            "mode": "validated-answer-generation",
             "guardrail": "No citation, no case-specific answer.",
         })
 

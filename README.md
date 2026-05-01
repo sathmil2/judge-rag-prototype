@@ -11,6 +11,7 @@ A small full-stack prototype for a court-document assistant:
 - Return source-backed citation cards from documents and events
 - Show retrieval scores and matched terms for debugging
 - Validate that citation snippets map back to stored source text
+- Generate answers through a separate answer provider layer
 - Open the cited document page
 
 This first version is intentionally dependency-light. The backend uses Python's standard library, and the frontend is plain HTML/CSS/JavaScript. It is designed as a learning scaffold that can later be upgraded to React, Spring Boot, OCR, vector search, and Azure/OpenAI services.
@@ -62,6 +63,30 @@ export AZURE_DOCUMENT_INTELLIGENCE_KEY="YOUR-KEY"
 
 The Azure adapter boundary is scaffolded, but the actual cloud OCR polling call is intentionally left as the next integration step so keys and security choices are handled deliberately.
 
+The answer generation layer lives in:
+
+```text
+backend/answer.py
+```
+
+By default it uses an extractive provider. It only writes answers from validated retrieved snippets.
+
+To prepare for a future LLM provider:
+
+```bash
+export ANSWER_PROVIDER=openai
+export OPENAI_API_KEY="YOUR-KEY"
+```
+
+or:
+
+```bash
+export ANSWER_PROVIDER=azure-openai
+export AZURE_OPENAI_API_KEY="YOUR-KEY"
+```
+
+The provider boundary is scaffolded, but the cloud LLM call is intentionally left as a separate production integration step. The current prototype still enforces citation validation before returning an answer.
+
 You can also add docket events and legal references in the sidebar, then ask questions across:
 
 - All sources
@@ -95,5 +120,5 @@ What remedies can an order of protection include?
 - Implement the Azure Document Intelligence call in `backend/ocr.py`
 - Store metadata in PostgreSQL
 - Add pgvector or Azure AI Search
-- Add OpenAI/Azure OpenAI answer generation
+- Implement the OpenAI/Azure OpenAI call in `backend/answer.py`
 - Add authentication, role-based case access, and audit logs

@@ -18,6 +18,7 @@ const refreshAudit = document.querySelector("#refreshAudit");
 const guardrailText = document.querySelector("#guardrailText");
 const modeBadge = document.querySelector("#modeBadge");
 const validationStatus = document.querySelector("#validationStatus");
+const answerProvider = document.querySelector("#answerProvider");
 const viewerDialog = document.querySelector("#viewerDialog");
 const viewerFrame = document.querySelector("#viewerFrame");
 const viewerTitle = document.querySelector("#viewerTitle");
@@ -148,6 +149,17 @@ function renderValidation(validation) {
   validationStatus.className = `validation-status ${validation.status === "passed" ? "valid" : "invalid"}`;
 }
 
+function renderAnswerMeta(answerMeta) {
+  if (!answerMeta) {
+    answerProvider.textContent = "Answer provider has not run yet.";
+    answerProvider.className = "answer-provider";
+    return;
+  }
+
+  answerProvider.textContent = `${answerMeta.provider} · ${answerMeta.status}`;
+  answerProvider.className = `answer-provider ${answerMeta.status === "complete" ? "valid" : "warning"}`;
+}
+
 function renderAudit(auditLog) {
   auditList.innerHTML = "";
   if (!auditLog.length) {
@@ -161,7 +173,7 @@ function renderAudit(auditLog) {
     const date = new Date(entry.timestamp * 1000).toLocaleString();
     item.innerHTML = `
       <strong>${escapeHtml(entry.question)}</strong>
-      <span class="meta">${escapeHtml(entry.caseNumber || "all cases")} · ${escapeHtml(entry.sourceFilter)} · ${escapeHtml(entry.validation?.status || "not validated")} · ${escapeHtml(date)}</span>
+      <span class="meta">${escapeHtml(entry.caseNumber || "all cases")} · ${escapeHtml(entry.sourceFilter)} · ${escapeHtml(entry.validation?.status || "not validated")} · ${escapeHtml(entry.answerProvider || "unknown provider")} · ${escapeHtml(date)}</span>
       <span class="meta">${entry.citations?.length || 0} citation${entry.citations?.length === 1 ? "" : "s"}</span>
     `;
     auditList.appendChild(item);
@@ -273,6 +285,7 @@ askForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   answerText.textContent = "Retrieving cited pages...";
   renderValidation(null);
+  renderAnswerMeta(null);
   citationList.innerHTML = "";
 
   try {
@@ -289,11 +302,13 @@ askForm.addEventListener("submit", async (event) => {
     guardrailText.textContent = payload.guardrail;
     modeBadge.textContent = payload.mode;
     renderValidation(payload.validation);
+    renderAnswerMeta(payload.answerMeta);
     renderCitations(payload.citations);
     await loadAudit();
   } catch (error) {
     answerText.textContent = error.message;
     renderValidation(null);
+    renderAnswerMeta(null);
     citationList.innerHTML = "";
   }
 });

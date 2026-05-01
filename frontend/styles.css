@@ -249,7 +249,8 @@ h2 {
   line-height: 1.65;
 }
 
-.validation-status {
+.validation-status,
+.answer-provider {
   width: max-content;
   max-width: 100%;
   border: 1px solid var(--line);
@@ -260,14 +261,21 @@ h2 {
   font-weight: 800;
 }
 
-.validation-status.valid {
+.validation-status.valid,
+.answer-provider.valid {
   border-color: #8ab8a2;
   color: #1f6f49;
 }
 
-.validation-status.invalid {
+.validation-status.invalid,
+.answer-provider.invalid {
   border-color: #d6a29d;
   color: var(--danger);
+}
+
+.answer-provider.warning {
+  border-color: #d8bd82;
+  color: #7c540e;
 }
 
 .citation-card p {
