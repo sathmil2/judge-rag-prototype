@@ -86,21 +86,24 @@ backend/answer.py
 
 By default it uses an extractive provider. It only writes answers from validated retrieved snippets.
 
-To prepare for a future LLM provider:
+To use OpenAI Responses API answer generation:
 
 ```bash
 export ANSWER_PROVIDER=openai
 export OPENAI_API_KEY="YOUR-KEY"
+export OPENAI_MODEL="gpt-4.1-mini"
 ```
 
-or:
+To use an Azure OpenAI Responses-compatible endpoint:
 
 ```bash
 export ANSWER_PROVIDER=azure-openai
 export AZURE_OPENAI_API_KEY="YOUR-KEY"
+export AZURE_OPENAI_RESPONSES_URL="https://YOUR-ENDPOINT/openai/v1/responses?api-version=YOUR-API-VERSION"
+export AZURE_OPENAI_MODEL="YOUR-DEPLOYMENT-OR-MODEL"
 ```
 
-The provider boundary is scaffolded, but the cloud LLM call is intentionally left as a separate production integration step. The current prototype still enforces citation validation before returning an answer.
+The app sends only the retrieved citation snippets to the LLM. If the LLM call fails or the key is missing, it falls back to extractive answers. Citation validation still runs before returning an answer.
 
 You can also add docket events and legal references in the sidebar, then ask questions across:
 
@@ -135,5 +138,4 @@ What remedies can an order of protection include?
 - Implement the Azure Document Intelligence call in `backend/ocr.py`
 - Store metadata in PostgreSQL
 - Add pgvector or Azure AI Search
-- Implement the OpenAI/Azure OpenAI call in `backend/answer.py`
 - Add authentication, role-based case access, and audit logs
