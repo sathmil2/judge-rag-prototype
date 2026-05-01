@@ -5,6 +5,10 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -230,6 +234,10 @@ def missing_tools(tool_names: list[str]) -> list[str]:
 def extract_with_azure_placeholder(file_path: Path, content_type: str) -> ExtractionResult:
     endpoint = os.getenv("AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT", "").strip()
     key = os.getenv("AZURE_DOCUMENT_INTELLIGENCE_KEY", "").strip()
+    api_version = os.getenv("AZURE_DOCUMENT_INTELLIGENCE_API_VERSION", "2024-11-30").strip()
+    model_id = os.getenv("AZURE_DOCUMENT_INTELLIGENCE_MODEL", "prebuilt-read").strip()
+    poll_seconds = float(os.getenv("AZURE_DOCUMENT_INTELLIGENCE_POLL_SECONDS", "1.5"))
+    timeout_seconds = float(os.getenv("AZURE_DOCUMENT_INTELLIGENCE_TIMEOUT_SECONDS", "90"))
 
     if not endpoint or not key:
         result = extract_with_local_provider(file_path, content_type)
@@ -238,18 +246,142 @@ def extract_with_azure_placeholder(file_path: Path, content_type: str) -> Extrac
         )
         return result
 
-    return ExtractionResult(
-        pages=[
-            ExtractedPage(
-                pageNumber=1,
-                text=(
-                    "Azure OCR is configured but not implemented in this dependency-free prototype. "
-                    "Replace extract_with_azure_placeholder with an Azure Document Intelligence Read/Layout call."
-                ),
-                confidence=None,
+    try:
+        analyze_url = build_azure_analyze_url(endpoint, model_id, api_version)
+        operation_url = submit_azure_analyze_request(analyze_url, key, file_path, content_type)
+        result = poll_azure_analyze_result(operation_url, key, poll_seconds, timeout_seconds)
+        pages = pages_from_azure_result(result)
+        if not pages:
+            return ExtractionResult(
+                pages=[ExtractedPage(pageNumber=1, text="Azure Document Intelligence returned no page text.")],
+                provider=f"azure-document-intelligence:{model_id}",
+                status="needs_ocr",
+                warnings=["Azure analysis succeeded, but no page text was found."],
             )
-        ],
-        provider="azure-document-intelligence-placeholder",
-        status="needs_implementation",
-        warnings=["Azure adapter boundary is ready; HTTP polling implementation is the next integration step."],
+        return ExtractionResult(
+            pages=pages,
+            provider=f"azure-document-intelligence:{model_id}",
+            status="complete",
+            warnings=[],
+        )
+    except TimeoutError as error:
+        return azure_error_result(model_id, str(error))
+    except urllib.error.HTTPError as error:
+        details = error.read().decode("utf-8", errors="replace")
+        return azure_error_result(model_id, f"Azure OCR HTTP {error.code}: {details}")
+    except urllib.error.URLError as error:
+        return azure_error_result(model_id, f"Azure OCR network error: {error.reason}")
+    except OSError as error:
+        return azure_error_result(model_id, f"Azure OCR request failed: {error}")
+
+
+def build_azure_analyze_url(endpoint: str, model_id: str, api_version: str) -> str:
+    clean_endpoint = endpoint.rstrip("/")
+    encoded_model = urllib.parse.quote(model_id, safe="")
+    query = urllib.parse.urlencode({"api-version": api_version})
+    return f"{clean_endpoint}/documentintelligence/documentModels/{encoded_model}:analyze?{query}"
+
+
+def submit_azure_analyze_request(analyze_url: str, key: str, file_path: Path, content_type: str) -> str:
+    headers = {
+        "Ocp-Apim-Subscription-Key": key,
+        "Content-Type": content_type or "application/octet-stream",
+    }
+    request = urllib.request.Request(
+        analyze_url,
+        data=file_path.read_bytes(),
+        headers=headers,
+        method="POST",
     )
+    with urllib.request.urlopen(request, timeout=60) as response:
+        operation_url = response.headers.get("Operation-Location")
+        if not operation_url:
+            raise OSError("Azure response did not include Operation-Location.")
+        return operation_url
+
+
+def poll_azure_analyze_result(
+    operation_url: str,
+    key: str,
+    poll_seconds: float,
+    timeout_seconds: float,
+) -> dict:
+    deadline = time.monotonic() + timeout_seconds
+    headers = {"Ocp-Apim-Subscription-Key": key}
+
+    while time.monotonic() < deadline:
+        request = urllib.request.Request(operation_url, headers=headers, method="GET")
+        with urllib.request.urlopen(request, timeout=60) as response:
+            payload = json_loads(response.read())
+
+        status = payload.get("status", "").lower()
+        if status == "succeeded":
+            return payload
+        if status == "failed":
+            raise OSError(f"Azure analysis failed: {payload.get('error', payload)}")
+        time.sleep(poll_seconds)
+
+    raise TimeoutError(f"Azure analysis did not finish within {timeout_seconds:g} seconds.")
+
+
+def pages_from_azure_result(payload: dict) -> list[ExtractedPage]:
+    analyze_result = payload.get("analyzeResult", {})
+    content = analyze_result.get("content", "")
+    pages = analyze_result.get("pages", [])
+    extracted_pages: list[ExtractedPage] = []
+
+    for page_index, page in enumerate(pages, start=1):
+        spans = page.get("spans", [])
+        page_text = text_from_spans(content, spans)
+        if not page_text:
+            page_text = text_from_words(page.get("words", []))
+        extracted_pages.append(ExtractedPage(
+            pageNumber=page.get("pageNumber", page_index),
+            text=page_text.strip(),
+            confidence=average_word_confidence(page.get("words", [])),
+        ))
+
+    if not extracted_pages and content.strip():
+        extracted_pages.append(ExtractedPage(pageNumber=1, text=content.strip(), confidence=None))
+
+    return [page for page in extracted_pages if page.text]
+
+
+def text_from_spans(content: str, spans: list[dict]) -> str:
+    pieces: list[str] = []
+    for span in spans:
+        offset = int(span.get("offset", 0))
+        length = int(span.get("length", 0))
+        if length > 0:
+            pieces.append(content[offset:offset + length])
+    return "\n".join(piece.strip() for piece in pieces if piece.strip())
+
+
+def text_from_words(words: list[dict]) -> str:
+    return " ".join(str(word.get("content", "")).strip() for word in words if word.get("content"))
+
+
+def average_word_confidence(words: list[dict]) -> float | None:
+    confidences = [
+        float(word["confidence"])
+        for word in words
+        if isinstance(word.get("confidence"), int | float)
+    ]
+    if not confidences:
+        return None
+    return round(sum(confidences) / len(confidences), 4)
+
+
+def azure_error_result(model_id: str, warning: str) -> ExtractionResult:
+    return ExtractionResult(
+        pages=[ExtractedPage(pageNumber=1, text="Azure OCR did not return searchable text for this document.")],
+        provider=f"azure-document-intelligence:{model_id}",
+        status="needs_ocr",
+        warnings=[warning],
+    )
+
+
+def json_loads(raw: bytes) -> dict:
+    import json
+
+    return json.loads(raw.decode("utf-8"))

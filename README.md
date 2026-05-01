@@ -72,9 +72,11 @@ To prepare for Azure Document Intelligence:
 export OCR_PROVIDER=azure
 export AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT="https://YOUR-RESOURCE.cognitiveservices.azure.com"
 export AZURE_DOCUMENT_INTELLIGENCE_KEY="YOUR-KEY"
+export AZURE_DOCUMENT_INTELLIGENCE_MODEL="prebuilt-read"
+export AZURE_DOCUMENT_INTELLIGENCE_API_VERSION="2024-11-30"
 ```
 
-The Azure adapter boundary is scaffolded, but the actual cloud OCR polling call is intentionally left as the next integration step so keys and security choices are handled deliberately.
+The Azure adapter uses the Document Intelligence REST API. It submits the uploaded file, polls the returned operation URL, then stores extracted text by page. Keep Azure keys out of GitHub; use environment variables or a secrets manager.
 
 The answer generation layer lives in:
 
