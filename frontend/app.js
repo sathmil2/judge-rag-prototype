@@ -39,12 +39,17 @@ function renderDocuments(documents) {
   }
 
   for (const doc of documents.slice().reverse()) {
+    const extraction = doc.extraction || { provider: "unknown", status: "unknown", warnings: [] };
+    const warnings = extraction.warnings?.length
+      ? `<span class="meta warning">${escapeHtml(extraction.warnings[0])}</span>`
+      : "";
     const item = document.createElement("article");
     item.className = "document-item";
     item.innerHTML = `
       <strong>${escapeHtml(doc.documentTitle)}</strong>
       <span class="meta">${escapeHtml(doc.caseNumber)} · ${escapeHtml(formatDate(doc.filingDate))} · ${doc.pageCount} page${doc.pageCount === 1 ? "" : "s"}</span>
-      <span class="meta">${escapeHtml(doc.documentId)}</span>
+      <span class="meta">${escapeHtml(doc.documentId)} · ${escapeHtml(extraction.provider)} · ${escapeHtml(extraction.status)}</span>
+      ${warnings}
     `;
     documentList.appendChild(item);
   }

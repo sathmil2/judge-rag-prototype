@@ -14,6 +14,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
+from ocr import extract_document
+
 
 ROOT = Path(__file__).resolve().parents[1]
 FRONTEND_DIR = ROOT / "frontend"
@@ -65,30 +67,6 @@ def write_index(index: dict) -> None:
     tmp = INDEX_FILE.with_suffix(".tmp")
     tmp.write_text(json.dumps(index, indent=2), encoding="utf-8")
     tmp.replace(INDEX_FILE)
-
-
-def extract_pages(file_path: Path, content_type: str) -> list[str]:
-    """Dependency-free text extraction for the prototype.
-
-    Production hook: replace this with OCR/page extraction from Azure Document
-    Intelligence, AWS Textract, Google Document AI, or a PDF text parser.
-    """
-    raw = file_path.read_bytes()
-    if content_type.startswith("text/") or file_path.suffix.lower() in {".txt", ".md", ".csv"}:
-        text = raw.decode("utf-8", errors="replace")
-        pages = [page.strip() for page in text.split("\f")]
-        return [page for page in pages if page] or [text.strip()]
-
-    if file_path.suffix.lower() == ".pdf":
-        # Very rough fallback for simple digital PDFs. Scanned PDFs need OCR.
-        text = raw.decode("latin-1", errors="ignore")
-        snippets = re.findall(r"\(([^()]{1,1000})\)", text)
-        fallback = " ".join(snippets).strip()
-        if fallback:
-            return [fallback]
-        return ["Text extraction is unavailable for this PDF in the dependency-free prototype. Add OCR to index this document."]
-
-    return ["Text extraction is unavailable for this file type. Add OCR to index this document."]
 
 
 def tokenize(text: str) -> list[str]:
@@ -223,7 +201,7 @@ class Handler(BaseHTTPRequestHandler):
 
         title = title or original_name
         content_type = file_field["content_type"] or mimetypes.guess_type(original_name)[0] or "application/octet-stream"
-        pages = extract_pages(saved_path, content_type)
+        extraction = extract_document(saved_path, content_type)
 
         index = read_index()
         document = {
@@ -233,12 +211,19 @@ class Handler(BaseHTTPRequestHandler):
             "filingDate": filing_date,
             "sourceFile": saved_name,
             "contentType": content_type,
-            "pageCount": len(pages),
+            "pageCount": len(extraction.pages),
+            "extraction": {
+                "provider": extraction.provider,
+                "status": extraction.status,
+                "warnings": extraction.warnings,
+            },
             "uploadedAt": int(time.time()),
         }
         index["documents"].append(document)
 
-        for page_number, page_text in enumerate(pages, start=1):
+        for page in extraction.pages:
+            page_number = page.pageNumber
+            page_text = page.text
             viewer_url = f"/document-viewer?case={case_number}&docId={document_id}&page={page_number}"
             index["chunks"].append(asdict(PageChunk(
                 caseNumber=case_number,

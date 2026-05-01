@@ -294,6 +294,10 @@ dialog::backdrop {
   color: var(--danger);
 }
 
+.warning {
+  color: #7c540e;
+}
+
 @media (max-width: 900px) {
   .shell {
     padding: 0;
