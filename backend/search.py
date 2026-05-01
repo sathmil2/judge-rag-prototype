@@ -1,18 +1,27 @@
 from __future__ import annotations
 
+import hashlib
+import math
 import re
+from collections import Counter
 from dataclasses import dataclass
 
+
+VECTOR_DIMENSIONS = 256
 
 STOP_WORDS = {
     "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "has", "in",
     "is", "it", "of", "on", "or", "that", "the", "this", "to", "was", "were", "with",
+    "about", "after", "before", "can", "could", "did", "does", "do", "had", "have",
+    "how", "into", "may", "should", "what", "when", "where", "which", "who", "why",
 }
 
 
 @dataclass
 class SearchResult:
-    score: int
+    score: float
+    keywordScore: float
+    vectorScore: float
     matchedTerms: list[str]
     source: dict
 
@@ -28,16 +37,25 @@ def retrieve_sources(
     phrases = extract_phrases(question)
     dates = extract_dates(question)
     records = build_search_records(index, case_number, source_filter)
+    query_vector = embed_text(question)
 
     ranked = []
     for record in records:
-        score, matched_terms = score_record(record, terms, phrases, dates)
+        keyword_score, matched_terms = score_record(record, terms, phrases, dates)
+        vector_score = cosine_similarity(query_vector, embed_text(record["searchText"]))
+        score = hybrid_score(keyword_score, vector_score)
         if score > 0:
-            ranked.append(SearchResult(score=score, matchedTerms=matched_terms, source=record))
+            ranked.append(SearchResult(
+                score=score,
+                keywordScore=keyword_score,
+                vectorScore=vector_score,
+                matchedTerms=matched_terms,
+                source=record,
+            ))
 
     return sorted(
         ranked,
-        key=lambda result: (result.score, len(result.matchedTerms)),
+        key=lambda result: (result.score, result.keywordScore, result.vectorScore, len(result.matchedTerms)),
         reverse=True,
     )[:limit]
 
@@ -124,40 +142,77 @@ def extract_dates(text: str) -> list[str]:
     return list(dict.fromkeys(matches))
 
 
-def score_record(record: dict, terms: list[str], phrases: list[str], dates: list[str]) -> tuple[int, list[str]]:
+def score_record(record: dict, terms: list[str], phrases: list[str], dates: list[str]) -> tuple[float, list[str]]:
     text = record["searchText"].lower()
     title = record["documentTitle"].lower()
     source_type = record["sourceType"].lower()
     source_label = record.get("sourceLabel", "").lower()
     matched_terms: list[str] = []
-    score = 0
+    score = 0.0
 
     for phrase in phrases:
         if phrase in text:
-            score += 8
+            score += 8.0
             matched_terms.append(phrase)
 
     for date in dates:
         if date in text or date in record.get("filingDate", "").lower():
-            score += 12
+            score += 12.0
             matched_terms.append(date)
 
     for term in terms:
         occurrences = text.count(term)
         if occurrences:
-            score += occurrences
+            score += float(occurrences)
             matched_terms.append(term)
         if term in title:
-            score += 3
+            score += 3.0
             matched_terms.append(f"title:{term}")
         if term in source_label:
-            score += 4
+            score += 4.0
             matched_terms.append(f"citation:{term}")
         if term in source_type:
-            score += 2
+            score += 2.0
             matched_terms.append(f"source:{term}")
 
     return score, list(dict.fromkeys(matched_terms))
+
+
+def hybrid_score(keyword_score: float, vector_score: float) -> float:
+    return round(keyword_score + (vector_score * 20.0), 4)
+
+
+def embed_text(text: str) -> list[float]:
+    features = vector_features(text)
+    vector = [0.0] * VECTOR_DIMENSIONS
+    for token, count in features.items():
+        digest = hashlib.blake2b(token.encode("utf-8"), digest_size=4).digest()
+        bucket = int.from_bytes(digest, "big") % VECTOR_DIMENSIONS
+        vector[bucket] += 1.0 + math.log(count)
+    return normalize_vector(vector)
+
+
+def vector_features(text: str) -> Counter[str]:
+    tokens = tokenize(text)
+    features: Counter[str] = Counter(tokens)
+    for index in range(len(tokens) - 1):
+        features[f"{tokens[index]} {tokens[index + 1]}"] += 2
+    for index in range(len(tokens) - 2):
+        features[f"{tokens[index]} {tokens[index + 1]} {tokens[index + 2]}"] += 3
+    return features
+
+
+def normalize_vector(vector: list[float]) -> list[float]:
+    norm = math.sqrt(sum(value * value for value in vector))
+    if norm == 0:
+        return vector
+    return [value / norm for value in vector]
+
+
+def cosine_similarity(left: list[float], right: list[float]) -> float:
+    if not left or not right:
+        return 0.0
+    return round(sum(a * b for a, b in zip(left, right)), 4)
 
 
 def build_citations(results: list[SearchResult]) -> list[dict]:
@@ -178,6 +233,9 @@ def build_citations(results: list[SearchResult]) -> list[dict]:
             "sourceLabel": source["sourceLabel"],
             "sourceText": source["chunkText"],
             "score": result.score,
+            "keywordScore": result.keywordScore,
+            "vectorScore": result.vectorScore,
+            "searchMode": "hybrid",
             "matchedTerms": result.matchedTerms,
             "verified": snippet[:80].lower() in " ".join(source["chunkText"].split()).lower(),
         })

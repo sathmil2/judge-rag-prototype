@@ -9,6 +9,7 @@ A small full-stack prototype for a court-document assistant:
 - Split text by page
 - Ask questions
 - Return source-backed citation cards from documents and events
+- Use hybrid retrieval with keyword and local vector scores
 - Show retrieval scores and matched terms for debugging
 - Validate that citation snippets map back to stored source text
 - Generate answers through a separate answer provider layer
@@ -132,9 +133,23 @@ Then ask:
 What remedies can an order of protection include?
 ```
 
+The retrieval layer lives in:
+
+```text
+backend/search.py
+```
+
+It currently uses dependency-free hybrid search:
+
+- keyword scoring for exact names, dates, legal terms, titles, and citations
+- local hashed vector scoring for broader semantic overlap
+- combined hybrid score for ranking
+
+For production, replace the local vector scoring with pgvector, Azure AI Search, Elasticsearch, or OpenSearch.
+
 ## Next Upgrades
 
-- Replace `backend/search.py` keyword scoring with hybrid search
+- Replace local hashed vectors with pgvector or Azure AI Search embeddings
 - Implement the Azure Document Intelligence call in `backend/ocr.py`
 - Store metadata in PostgreSQL
 - Add pgvector or Azure AI Search

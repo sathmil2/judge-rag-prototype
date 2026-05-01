@@ -116,7 +116,8 @@ function renderCitations(citations) {
     card.className = "citation-card";
     card.innerHTML = `
       <strong>${escapeHtml(sourceLine)}</strong>
-      <span class="meta">${escapeHtml(citation.caseNumber)} · ${escapeHtml(formatDate(citation.filingDate))} · ${escapeHtml(citation.documentId)} · score ${citation.score ?? 0} · ${citation.verified ? "verified" : "needs review"}</span>
+      <span class="meta">${escapeHtml(citation.caseNumber)} · ${escapeHtml(formatDate(citation.filingDate))} · ${escapeHtml(citation.documentId)} · ${escapeHtml(citation.searchMode || "keyword")} · ${citation.verified ? "verified" : "needs review"}</span>
+      <span class="meta">Hybrid ${formatScore(citation.score)} · Keyword ${formatScore(citation.keywordScore)} · Vector ${formatScore(citation.vectorScore)}</span>
       <span class="meta">Matched: ${escapeHtml((citation.matchedTerms || []).join(", ") || "source text")}</span>
       <p>${escapeHtml(citation.snippet)}</p>
       ${openButton}
@@ -187,6 +188,11 @@ function escapeHtml(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
+}
+
+function formatScore(value) {
+  const number = Number(value || 0);
+  return Number.isInteger(number) ? String(number) : number.toFixed(3);
 }
 
 async function loadDocuments() {
