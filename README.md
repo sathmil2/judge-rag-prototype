@@ -50,8 +50,21 @@ backend/ocr.py
 By default it uses the local provider:
 
 - `.txt`, `.md`, `.csv`: full page text extraction
-- simple digital PDF: rough fallback extraction
-- scanned PDF/TIFF/image: marked as `needs_ocr`
+- digital PDF: `pdftotext` when installed, otherwise rough fallback extraction
+- scanned PDF: `pdftoppm` + `tesseract` when installed
+- image/TIFF: `tesseract` when installed
+
+Install local OCR tools on macOS:
+
+```bash
+brew install tesseract poppler
+```
+
+After installing, restart the server:
+
+```bash
+python3 backend/server.py
+```
 
 To prepare for Azure Document Intelligence:
 
