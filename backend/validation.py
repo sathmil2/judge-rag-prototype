@@ -19,11 +19,13 @@ def validate_citations(citations: list[dict]) -> dict:
 def validate_citation(citation: dict) -> dict:
     snippet = normalize(citation.get("snippet", ""))
     source_text = normalize(citation.get("sourceText", ""))
-    required_fields = ["caseNumber", "documentId", "documentTitle", "sourceType", "sourceLabel"]
+    required_fields = ["documentId", "documentTitle", "sourceType", "sourceLabel"]
+    if citation.get("sourceType") in {"case document", "docket event"}:
+        required_fields.append("caseNumber")
     missing_fields = [field for field in required_fields if not citation.get(field)]
 
     snippet_supported = bool(snippet) and snippet[:80] in source_text
-    has_location = citation.get("sourceType") == "docket event" or citation.get("pageNumber") is not None
+    has_location = citation.get("sourceType") in {"docket event", "legal reference"} or citation.get("pageNumber") is not None
     valid = not missing_fields and snippet_supported and has_location
 
     reasons = []
@@ -53,4 +55,3 @@ def strip_internal_source_text(citations: list[dict]) -> list[dict]:
 
 def normalize(text: str) -> str:
     return " ".join(str(text).split()).lower()
-

@@ -81,6 +81,23 @@ def build_search_records(index: dict, case_number: str, source_filter: str) -> l
                 "sourceFile": "",
             })
 
+    if source_filter in {"all", "law"}:
+        for reference in index["legalReferences"]:
+            records.append({
+                **reference,
+                "caseNumber": "",
+                "searchText": reference["referenceText"],
+                "chunkText": reference["referenceText"],
+                "sourceType": "legal reference",
+                "sourceLabel": reference["citation"],
+                "documentId": reference["referenceId"],
+                "documentTitle": reference["title"],
+                "filingDate": reference["effectiveDate"],
+                "pageNumber": None,
+                "viewerUrl": reference["sourceUrl"],
+                "sourceFile": "",
+            })
+
     return records
 
 
@@ -111,6 +128,7 @@ def score_record(record: dict, terms: list[str], phrases: list[str], dates: list
     text = record["searchText"].lower()
     title = record["documentTitle"].lower()
     source_type = record["sourceType"].lower()
+    source_label = record.get("sourceLabel", "").lower()
     matched_terms: list[str] = []
     score = 0
 
@@ -132,6 +150,9 @@ def score_record(record: dict, terms: list[str], phrases: list[str], dates: list
         if term in title:
             score += 3
             matched_terms.append(f"title:{term}")
+        if term in source_label:
+            score += 4
+            matched_terms.append(f"citation:{term}")
         if term in source_type:
             score += 2
             matched_terms.append(f"source:{term}")

@@ -50,10 +50,21 @@ class CaseEvent:
     source: str
 
 
+@dataclass
+class LegalReference:
+    referenceId: str
+    jurisdiction: str
+    citation: str
+    title: str
+    effectiveDate: str
+    referenceText: str
+    sourceUrl: str
+
+
 def ensure_storage() -> None:
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     if not INDEX_FILE.exists():
-        INDEX_FILE.write_text(json.dumps({"documents": [], "chunks": [], "events": [], "auditLog": []}, indent=2), encoding="utf-8")
+        INDEX_FILE.write_text(json.dumps({"documents": [], "chunks": [], "events": [], "legalReferences": [], "auditLog": []}, indent=2), encoding="utf-8")
 
 
 def read_index() -> dict:
@@ -63,6 +74,7 @@ def read_index() -> dict:
     index.setdefault("documents", [])
     index.setdefault("chunks", [])
     index.setdefault("events", [])
+    index.setdefault("legalReferences", [])
     index.setdefault("auditLog", [])
     return index
 
@@ -120,6 +132,10 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({"auditLog": read_index()["auditLog"][-50:]})
             return
 
+        if path == "/api/legal-references":
+            self.send_json({"legalReferences": read_index()["legalReferences"]})
+            return
+
         if path.startswith("/uploads/"):
             self.serve_file(UPLOAD_DIR / path.removeprefix("/uploads/"))
             return
@@ -144,6 +160,10 @@ class Handler(BaseHTTPRequestHandler):
 
         if parsed.path == "/api/events":
             self.handle_event()
+            return
+
+        if parsed.path == "/api/legal-references":
+            self.handle_legal_reference()
             return
 
         self.send_error(HTTPStatus.NOT_FOUND)
@@ -242,6 +262,40 @@ class Handler(BaseHTTPRequestHandler):
         index["events"].append(event)
         write_index(index)
         self.send_json({"event": event})
+
+    def handle_legal_reference(self) -> None:
+        length = int(self.headers.get("Content-Length", "0"))
+        try:
+            payload = json.loads(self.rfile.read(length).decode("utf-8"))
+        except json.JSONDecodeError:
+            self.send_json({"error": "Request body must be valid JSON."}, HTTPStatus.BAD_REQUEST)
+            return
+
+        citation = payload.get("citation", "").strip()
+        title = payload.get("title", "").strip()
+        reference_text = payload.get("referenceText", "").strip()
+        jurisdiction = payload.get("jurisdiction", "Illinois").strip()
+        effective_date = payload.get("effectiveDate", "").strip()
+        source_url = payload.get("sourceUrl", "").strip()
+
+        if not citation or not title or not reference_text:
+            self.send_json({"error": "Citation, title, and reference text are required."}, HTTPStatus.BAD_REQUEST)
+            return
+
+        reference = asdict(LegalReference(
+            referenceId=f"LAW-{uuid.uuid4().hex[:8].upper()}",
+            jurisdiction=jurisdiction,
+            citation=citation,
+            title=title,
+            effectiveDate=effective_date,
+            referenceText=reference_text,
+            sourceUrl=source_url,
+        ))
+
+        index = read_index()
+        index["legalReferences"].append(reference)
+        write_index(index)
+        self.send_json({"legalReference": reference})
 
     def handle_ask(self) -> None:
         length = int(self.headers.get("Content-Length", "0"))

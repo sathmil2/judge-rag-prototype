@@ -45,6 +45,18 @@ button:hover {
   background: var(--accent-strong);
 }
 
+.secondary-button {
+  min-height: 34px;
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--accent-strong);
+  padding: 0 12px;
+}
+
+.secondary-button:hover {
+  background: #edf6f4;
+}
+
 input,
 select,
 textarea {

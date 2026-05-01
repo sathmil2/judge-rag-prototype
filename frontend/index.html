@@ -71,6 +71,37 @@
             <h2>Case Events</h2>
             <div id="eventList" class="document-list"></div>
           </section>
+
+          <form id="lawForm" class="panel">
+            <h2>Legal Reference</h2>
+            <label>
+              <span>Citation</span>
+              <input name="citation" placeholder="750 ILCS 60/214" required />
+            </label>
+            <label>
+              <span>Title</span>
+              <input name="title" placeholder="Order of protection remedies" required />
+            </label>
+            <label>
+              <span>Effective date</span>
+              <input name="effectiveDate" type="date" />
+            </label>
+            <label>
+              <span>Source URL</span>
+              <input name="sourceUrl" placeholder="Official source URL" />
+            </label>
+            <label>
+              <span>Reference text</span>
+              <textarea name="referenceText" placeholder="Paste statute, rule, or local court rule text." required></textarea>
+            </label>
+            <button type="submit">Add legal reference</button>
+            <p id="lawStatus" class="status"></p>
+          </form>
+
+          <section class="panel law-panel">
+            <h2>Legal References</h2>
+            <div id="lawList" class="document-list"></div>
+          </section>
         </aside>
 
         <section class="main-panel">
@@ -82,9 +113,10 @@
             <label>
               <span>Sources</span>
               <select id="sourceFilter">
-                <option value="all">Documents and events</option>
+                <option value="all">All sources</option>
                 <option value="documents">Documents only</option>
                 <option value="events">Events only</option>
+                <option value="law">Law/rules only</option>
               </select>
             </label>
             <form id="askForm" class="ask-form">
@@ -108,6 +140,12 @@
               <p id="guardrailText">No citation, no case-specific answer.</p>
             </div>
             <div id="citationList" class="citation-list"></div>
+
+            <div class="citations-header">
+              <h2>Audit Trail</h2>
+              <button id="refreshAudit" class="secondary-button" type="button">Refresh</button>
+            </div>
+            <div id="auditList" class="citation-list"></div>
           </section>
         </section>
       </section>

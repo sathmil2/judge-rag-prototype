@@ -5,6 +5,7 @@ A small full-stack prototype for a court-document assistant:
 - Upload a document
 - Store case/document metadata
 - Store docket/case events
+- Store legal references/statutes separately from case records
 - Split text by page
 - Ask questions
 - Return source-backed citation cards from documents and events
@@ -61,11 +62,12 @@ export AZURE_DOCUMENT_INTELLIGENCE_KEY="YOUR-KEY"
 
 The Azure adapter boundary is scaffolded, but the actual cloud OCR polling call is intentionally left as the next integration step so keys and security choices are handled deliberately.
 
-You can also add a docket event in the sidebar, then ask questions across:
+You can also add docket events and legal references in the sidebar, then ask questions across:
 
-- Documents and events
+- All sources
 - Documents only
 - Events only
+- Law/rules only
 
 Example question:
 
@@ -74,6 +76,18 @@ Was temporary relief granted?
 ```
 
 The answer should cite both the uploaded sample document and the docket event when both sources match.
+
+For the legal reference demo, paste content from:
+
+```text
+sample-legal-reference.txt
+```
+
+Then ask:
+
+```text
+What remedies can an order of protection include?
+```
 
 ## Next Upgrades
 

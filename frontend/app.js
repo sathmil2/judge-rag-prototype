@@ -4,12 +4,17 @@ const documentList = document.querySelector("#documentList");
 const eventForm = document.querySelector("#eventForm");
 const eventStatus = document.querySelector("#eventStatus");
 const eventList = document.querySelector("#eventList");
+const lawForm = document.querySelector("#lawForm");
+const lawStatus = document.querySelector("#lawStatus");
+const lawList = document.querySelector("#lawList");
 const askForm = document.querySelector("#askForm");
 const questionInput = document.querySelector("#questionInput");
 const caseFilter = document.querySelector("#caseFilter");
 const sourceFilter = document.querySelector("#sourceFilter");
 const answerText = document.querySelector("#answerText");
 const citationList = document.querySelector("#citationList");
+const auditList = document.querySelector("#auditList");
+const refreshAudit = document.querySelector("#refreshAudit");
 const guardrailText = document.querySelector("#guardrailText");
 const modeBadge = document.querySelector("#modeBadge");
 const validationStatus = document.querySelector("#validationStatus");
@@ -75,6 +80,25 @@ function renderEvents(events) {
   }
 }
 
+function renderLegalReferences(references) {
+  lawList.innerHTML = "";
+  if (!references.length) {
+    lawList.innerHTML = `<p class="empty">No legal references added yet.</p>`;
+    return;
+  }
+
+  for (const reference of references.slice().reverse()) {
+    const item = document.createElement("article");
+    item.className = "document-item";
+    item.innerHTML = `
+      <strong>${escapeHtml(reference.citation)}</strong>
+      <span class="meta">${escapeHtml(reference.title)} · ${escapeHtml(reference.jurisdiction)} · ${escapeHtml(formatDate(reference.effectiveDate))}</span>
+      <span class="meta">${escapeHtml(reference.referenceText.slice(0, 130))}${reference.referenceText.length > 130 ? "..." : ""}</span>
+    `;
+    lawList.appendChild(item);
+  }
+}
+
 function renderCitations(citations) {
   citationList.innerHTML = "";
   if (!citations.length) {
@@ -83,10 +107,10 @@ function renderCitations(citations) {
   }
 
   for (const citation of citations) {
-    const sourceLine = citation.sourceType === "docket event"
-      ? `${citation.sourceType} · ${citation.sourceLabel}`
-      : `${citation.sourceType} · ${citation.documentTitle}, page ${citation.pageNumber}`;
-    const openButton = citation.fileUrl ? `<button type="button">Open cited page</button>` : "";
+    const sourceLine = citation.sourceType === "case document"
+      ? `${citation.sourceType} · ${citation.documentTitle}, page ${citation.pageNumber}`
+      : `${citation.sourceType} · ${citation.sourceLabel}`;
+    const openButton = citation.fileUrl || citation.viewerUrl ? `<button type="button">Open source</button>` : "";
     const card = document.createElement("article");
     card.className = "citation-card";
     card.innerHTML = `
@@ -99,9 +123,13 @@ function renderCitations(citations) {
     const openCitation = card.querySelector("button");
     if (openCitation) {
       openCitation.addEventListener("click", () => {
-        viewerTitle.textContent = `${citation.documentTitle} · page ${citation.pageNumber}`;
-        viewerFrame.src = citation.fileUrl;
-        viewerDialog.showModal();
+        if (citation.fileUrl) {
+          viewerTitle.textContent = `${citation.documentTitle} · page ${citation.pageNumber}`;
+          viewerFrame.src = citation.fileUrl;
+          viewerDialog.showModal();
+        } else if (citation.viewerUrl) {
+          window.open(citation.viewerUrl, "_blank", "noopener");
+        }
       });
     }
     citationList.appendChild(card);
@@ -118,6 +146,26 @@ function renderValidation(validation) {
   const summary = `${validation.validCitationCount} of ${validation.totalCitationCount} citations validated`;
   validationStatus.textContent = `${validation.status}: ${summary}`;
   validationStatus.className = `validation-status ${validation.status === "passed" ? "valid" : "invalid"}`;
+}
+
+function renderAudit(auditLog) {
+  auditList.innerHTML = "";
+  if (!auditLog.length) {
+    auditList.innerHTML = `<p class="empty">No questions logged yet.</p>`;
+    return;
+  }
+
+  for (const entry of auditLog.slice().reverse().slice(0, 8)) {
+    const item = document.createElement("article");
+    item.className = "citation-card audit-card";
+    const date = new Date(entry.timestamp * 1000).toLocaleString();
+    item.innerHTML = `
+      <strong>${escapeHtml(entry.question)}</strong>
+      <span class="meta">${escapeHtml(entry.caseNumber || "all cases")} · ${escapeHtml(entry.sourceFilter)} · ${escapeHtml(entry.validation?.status || "not validated")} · ${escapeHtml(date)}</span>
+      <span class="meta">${entry.citations?.length || 0} citation${entry.citations?.length === 1 ? "" : "s"}</span>
+    `;
+    auditList.appendChild(item);
+  }
 }
 
 function escapeHtml(value) {
@@ -137,6 +185,16 @@ async function loadDocuments() {
 async function loadEvents() {
   const payload = await api("/api/events");
   renderEvents(payload.events);
+}
+
+async function loadLegalReferences() {
+  const payload = await api("/api/legal-references");
+  renderLegalReferences(payload.legalReferences);
+}
+
+async function loadAudit() {
+  const payload = await api("/api/audit");
+  renderAudit(payload.auditLog);
 }
 
 uploadForm.addEventListener("submit", async (event) => {
@@ -184,6 +242,33 @@ eventForm.addEventListener("submit", async (event) => {
   }
 });
 
+lawForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  lawStatus.textContent = "Adding legal reference...";
+  lawStatus.classList.remove("error");
+
+  const form = new FormData(lawForm);
+  try {
+    const payload = await api("/api/legal-references", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        citation: form.get("citation"),
+        title: form.get("title"),
+        effectiveDate: form.get("effectiveDate"),
+        sourceUrl: form.get("sourceUrl"),
+        referenceText: form.get("referenceText"),
+      }),
+    });
+    lawStatus.textContent = `Added ${payload.legalReference.citation}.`;
+    lawForm.reset();
+    await loadLegalReferences();
+  } catch (error) {
+    lawStatus.textContent = error.message;
+    lawStatus.classList.add("error");
+  }
+});
+
 askForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   answerText.textContent = "Retrieving cited pages...";
@@ -205,6 +290,7 @@ askForm.addEventListener("submit", async (event) => {
     modeBadge.textContent = payload.mode;
     renderValidation(payload.validation);
     renderCitations(payload.citations);
+    await loadAudit();
   } catch (error) {
     answerText.textContent = error.message;
     renderValidation(null);
@@ -217,10 +303,24 @@ closeViewer.addEventListener("click", () => {
   viewerFrame.src = "about:blank";
 });
 
+refreshAudit.addEventListener("click", () => {
+  loadAudit().catch((error) => {
+    auditList.innerHTML = `<p class="empty error">${escapeHtml(error.message)}</p>`;
+  });
+});
+
 loadDocuments().catch((error) => {
   documentList.innerHTML = `<p class="empty error">${escapeHtml(error.message)}</p>`;
 });
 
 loadEvents().catch((error) => {
   eventList.innerHTML = `<p class="empty error">${escapeHtml(error.message)}</p>`;
+});
+
+loadLegalReferences().catch((error) => {
+  lawList.innerHTML = `<p class="empty error">${escapeHtml(error.message)}</p>`;
+});
+
+loadAudit().catch((error) => {
+  auditList.innerHTML = `<p class="empty error">${escapeHtml(error.message)}</p>`;
 });
