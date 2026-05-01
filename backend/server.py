@@ -34,15 +34,30 @@ class PageChunk:
     viewerUrl: str
 
 
+@dataclass
+class CaseEvent:
+    caseNumber: str
+    eventId: str
+    eventDate: str
+    eventType: str
+    eventText: str
+    source: str
+
+
 def ensure_storage() -> None:
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     if not INDEX_FILE.exists():
-        INDEX_FILE.write_text(json.dumps({"documents": [], "chunks": [], "auditLog": []}, indent=2), encoding="utf-8")
+        INDEX_FILE.write_text(json.dumps({"documents": [], "chunks": [], "events": [], "auditLog": []}, indent=2), encoding="utf-8")
 
 
 def read_index() -> dict:
     ensure_storage()
-    return json.loads(INDEX_FILE.read_text(encoding="utf-8"))
+    index = json.loads(INDEX_FILE.read_text(encoding="utf-8"))
+    index.setdefault("documents", [])
+    index.setdefault("chunks", [])
+    index.setdefault("events", [])
+    index.setdefault("auditLog", [])
+    return index
 
 
 def write_index(index: dict) -> None:
@@ -86,7 +101,7 @@ def tokenize(text: str) -> list[str]:
 
 def score_chunk(query_terms: list[str], chunk: dict) -> int:
     text = chunk["chunkText"].lower()
-    title = chunk["documentTitle"].lower()
+    title = chunk.get("documentTitle", chunk.get("eventType", "")).lower()
     score = 0
     for term in query_terms:
         score += text.count(term)
@@ -142,6 +157,19 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({"documents": read_index()["documents"]})
             return
 
+        if path == "/api/events":
+            parsed_query = parse_qs(parsed.query)
+            case_number = parsed_query.get("caseNumber", [""])[0].strip().lower()
+            events = read_index()["events"]
+            if case_number:
+                events = [event for event in events if event["caseNumber"].lower() == case_number]
+            self.send_json({"events": events})
+            return
+
+        if path == "/api/audit":
+            self.send_json({"auditLog": read_index()["auditLog"][-50:]})
+            return
+
         if path.startswith("/uploads/"):
             self.serve_file(UPLOAD_DIR / path.removeprefix("/uploads/"))
             return
@@ -162,6 +190,10 @@ class Handler(BaseHTTPRequestHandler):
 
         if parsed.path == "/api/ask":
             self.handle_ask()
+            return
+
+        if parsed.path == "/api/events":
+            self.handle_event()
             return
 
         self.send_error(HTTPStatus.NOT_FOUND)
@@ -222,6 +254,38 @@ class Handler(BaseHTTPRequestHandler):
         write_index(index)
         self.send_json({"document": document})
 
+    def handle_event(self) -> None:
+        length = int(self.headers.get("Content-Length", "0"))
+        try:
+            payload = json.loads(self.rfile.read(length).decode("utf-8"))
+        except json.JSONDecodeError:
+            self.send_json({"error": "Request body must be valid JSON."}, HTTPStatus.BAD_REQUEST)
+            return
+
+        case_number = payload.get("caseNumber", "").strip()
+        event_date = payload.get("eventDate", "").strip()
+        event_type = payload.get("eventType", "").strip()
+        event_text = payload.get("eventText", "").strip()
+        source = payload.get("source", "manual docket entry").strip()
+
+        if not case_number or not event_type or not event_text:
+            self.send_json({"error": "Case number, event type, and event text are required."}, HTTPStatus.BAD_REQUEST)
+            return
+
+        event = asdict(CaseEvent(
+            caseNumber=case_number,
+            eventId=f"EVT-{uuid.uuid4().hex[:8].upper()}",
+            eventDate=event_date,
+            eventType=event_type,
+            eventText=event_text,
+            source=source,
+        ))
+
+        index = read_index()
+        index["events"].append(event)
+        write_index(index)
+        self.send_json({"event": event})
+
     def handle_ask(self) -> None:
         length = int(self.headers.get("Content-Length", "0"))
         try:
@@ -231,6 +295,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         question = payload.get("question", "").strip()
         case_number = payload.get("caseNumber", "").strip()
+        source_filter = payload.get("sourceFilter", "all").strip()
 
         if not question:
             self.send_json({"error": "Question is required."}, HTTPStatus.BAD_REQUEST)
@@ -238,10 +303,38 @@ class Handler(BaseHTTPRequestHandler):
 
         index = read_index()
         terms = tokenize(question)
-        candidates = [
-            chunk for chunk in index["chunks"]
-            if not case_number or chunk["caseNumber"].lower() == case_number.lower()
-        ]
+        candidates = []
+
+        if source_filter in {"all", "documents"}:
+            candidates.extend(
+                {
+                    **chunk,
+                    "sourceType": "case document",
+                    "sourceLabel": f"{chunk['documentTitle']}, page {chunk['pageNumber']}",
+                    "chunkText": chunk["chunkText"],
+                }
+                for chunk in index["chunks"]
+                if not case_number or chunk["caseNumber"].lower() == case_number.lower()
+            )
+
+        if source_filter in {"all", "events"}:
+            candidates.extend(
+                {
+                    **event,
+                    "sourceType": "docket event",
+                    "sourceLabel": event["eventType"],
+                    "documentId": event["eventId"],
+                    "documentTitle": event["eventType"],
+                    "filingDate": event["eventDate"],
+                    "pageNumber": None,
+                    "chunkText": event["eventText"],
+                    "viewerUrl": "",
+                    "sourceFile": "",
+                }
+                for event in index["events"]
+                if not case_number or event["caseNumber"].lower() == case_number.lower()
+            )
+
         ranked = sorted(
             ((score_chunk(terms, chunk), chunk) for chunk in candidates),
             key=lambda pair: pair[0],
@@ -250,24 +343,29 @@ class Handler(BaseHTTPRequestHandler):
         matches = [chunk for score, chunk in ranked if score > 0][:5]
 
         answer = summarize_answer(question, matches)
-        citations = [
-            {
+        citations = []
+        for chunk in matches:
+            snippet = " ".join(chunk["chunkText"].split())[:420]
+            citation = {
                 "caseNumber": chunk["caseNumber"],
                 "documentId": chunk["documentId"],
                 "documentTitle": chunk["documentTitle"],
                 "filingDate": chunk["filingDate"],
                 "pageNumber": chunk["pageNumber"],
-                "snippet": " ".join(chunk["chunkText"].split())[:420],
+                "snippet": snippet,
                 "viewerUrl": chunk["viewerUrl"],
-                "fileUrl": f"/uploads/{chunk['sourceFile']}#page={chunk['pageNumber']}",
+                "fileUrl": f"/uploads/{chunk['sourceFile']}#page={chunk['pageNumber']}" if chunk["sourceFile"] else "",
+                "sourceType": chunk["sourceType"],
+                "sourceLabel": chunk["sourceLabel"],
+                "verified": snippet[:80].lower() in " ".join(chunk["chunkText"].split()).lower(),
             }
-            for chunk in matches
-        ]
+            citations.append(citation)
 
         index["auditLog"].append({
             "timestamp": int(time.time()),
             "caseNumber": case_number,
             "question": question,
+            "sourceFilter": source_filter,
             "citations": citations,
         })
         write_index(index)

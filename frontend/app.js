@@ -1,9 +1,13 @@
 const uploadForm = document.querySelector("#uploadForm");
 const uploadStatus = document.querySelector("#uploadStatus");
 const documentList = document.querySelector("#documentList");
+const eventForm = document.querySelector("#eventForm");
+const eventStatus = document.querySelector("#eventStatus");
+const eventList = document.querySelector("#eventList");
 const askForm = document.querySelector("#askForm");
 const questionInput = document.querySelector("#questionInput");
 const caseFilter = document.querySelector("#caseFilter");
+const sourceFilter = document.querySelector("#sourceFilter");
 const answerText = document.querySelector("#answerText");
 const citationList = document.querySelector("#citationList");
 const guardrailText = document.querySelector("#guardrailText");
@@ -46,6 +50,25 @@ function renderDocuments(documents) {
   }
 }
 
+function renderEvents(events) {
+  eventList.innerHTML = "";
+  if (!events.length) {
+    eventList.innerHTML = `<p class="empty">No docket events added yet.</p>`;
+    return;
+  }
+
+  for (const event of events.slice().reverse()) {
+    const item = document.createElement("article");
+    item.className = "document-item";
+    item.innerHTML = `
+      <strong>${escapeHtml(event.eventType)}</strong>
+      <span class="meta">${escapeHtml(event.caseNumber)} · ${escapeHtml(formatDate(event.eventDate))}</span>
+      <span class="meta">${escapeHtml(event.eventText.slice(0, 130))}${event.eventText.length > 130 ? "..." : ""}</span>
+    `;
+    eventList.appendChild(item);
+  }
+}
+
 function renderCitations(citations) {
   citationList.innerHTML = "";
   if (!citations.length) {
@@ -54,19 +77,26 @@ function renderCitations(citations) {
   }
 
   for (const citation of citations) {
+    const sourceLine = citation.sourceType === "docket event"
+      ? `${citation.sourceType} · ${citation.sourceLabel}`
+      : `${citation.sourceType} · ${citation.documentTitle}, page ${citation.pageNumber}`;
+    const openButton = citation.fileUrl ? `<button type="button">Open cited page</button>` : "";
     const card = document.createElement("article");
     card.className = "citation-card";
     card.innerHTML = `
-      <strong>${escapeHtml(citation.documentTitle)}, page ${citation.pageNumber}</strong>
-      <span class="meta">${escapeHtml(citation.caseNumber)} · ${escapeHtml(formatDate(citation.filingDate))} · ${escapeHtml(citation.documentId)}</span>
+      <strong>${escapeHtml(sourceLine)}</strong>
+      <span class="meta">${escapeHtml(citation.caseNumber)} · ${escapeHtml(formatDate(citation.filingDate))} · ${escapeHtml(citation.documentId)} · ${citation.verified ? "verified" : "needs review"}</span>
       <p>${escapeHtml(citation.snippet)}</p>
-      <button type="button">Open cited page</button>
+      ${openButton}
     `;
-    card.querySelector("button").addEventListener("click", () => {
-      viewerTitle.textContent = `${citation.documentTitle} · page ${citation.pageNumber}`;
-      viewerFrame.src = citation.fileUrl;
-      viewerDialog.showModal();
-    });
+    const openCitation = card.querySelector("button");
+    if (openCitation) {
+      openCitation.addEventListener("click", () => {
+        viewerTitle.textContent = `${citation.documentTitle} · page ${citation.pageNumber}`;
+        viewerFrame.src = citation.fileUrl;
+        viewerDialog.showModal();
+      });
+    }
     citationList.appendChild(card);
   }
 }
@@ -83,6 +113,11 @@ function escapeHtml(value) {
 async function loadDocuments() {
   const payload = await api("/api/documents");
   renderDocuments(payload.documents);
+}
+
+async function loadEvents() {
+  const payload = await api("/api/events");
+  renderEvents(payload.events);
 }
 
 uploadForm.addEventListener("submit", async (event) => {
@@ -104,6 +139,32 @@ uploadForm.addEventListener("submit", async (event) => {
   }
 });
 
+eventForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  eventStatus.textContent = "Adding docket event...";
+  eventStatus.classList.remove("error");
+
+  const form = new FormData(eventForm);
+  try {
+    const payload = await api("/api/events", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        caseNumber: form.get("caseNumber"),
+        eventType: form.get("eventType"),
+        eventDate: form.get("eventDate"),
+        eventText: form.get("eventText"),
+      }),
+    });
+    eventStatus.textContent = `Added ${payload.event.eventType}.`;
+    eventForm.reset();
+    await loadEvents();
+  } catch (error) {
+    eventStatus.textContent = error.message;
+    eventStatus.classList.add("error");
+  }
+});
+
 askForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   answerText.textContent = "Retrieving cited pages...";
@@ -116,6 +177,7 @@ askForm.addEventListener("submit", async (event) => {
       body: JSON.stringify({
         question: questionInput.value,
         caseNumber: caseFilter.value,
+        sourceFilter: sourceFilter.value,
       }),
     });
     answerText.textContent = payload.answer;
@@ -137,3 +199,6 @@ loadDocuments().catch((error) => {
   documentList.innerHTML = `<p class="empty error">${escapeHtml(error.message)}</p>`;
 });
 
+loadEvents().catch((error) => {
+  eventList.innerHTML = `<p class="empty error">${escapeHtml(error.message)}</p>`;
+});

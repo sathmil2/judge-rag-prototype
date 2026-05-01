@@ -44,6 +44,33 @@
             <h2>Indexed Documents</h2>
             <div id="documentList" class="document-list"></div>
           </section>
+
+          <form id="eventForm" class="panel">
+            <h2>Docket Event</h2>
+            <label>
+              <span>Case number</span>
+              <input name="caseNumber" placeholder="2026-DV-123" required />
+            </label>
+            <label>
+              <span>Event type</span>
+              <input name="eventType" placeholder="Emergency hearing" required />
+            </label>
+            <label>
+              <span>Event date</span>
+              <input name="eventDate" type="date" />
+            </label>
+            <label>
+              <span>Event notes</span>
+              <textarea name="eventText" placeholder="Temporary relief granted pending full hearing." required></textarea>
+            </label>
+            <button type="submit">Add docket event</button>
+            <p id="eventStatus" class="status"></p>
+          </form>
+
+          <section class="panel event-panel">
+            <h2>Case Events</h2>
+            <div id="eventList" class="document-list"></div>
+          </section>
         </aside>
 
         <section class="main-panel">
@@ -51,6 +78,14 @@
             <label>
               <span>Ask about a case</span>
               <input id="caseFilter" placeholder="Optional case number filter" />
+            </label>
+            <label>
+              <span>Sources</span>
+              <select id="sourceFilter">
+                <option value="all">Documents and events</option>
+                <option value="documents">Documents only</option>
+                <option value="events">Events only</option>
+              </select>
             </label>
             <form id="askForm" class="ask-form">
               <input id="questionInput" placeholder="What happened on March 12?" required />
@@ -88,4 +123,3 @@
     <script src="/assets/app.js"></script>
   </body>
 </html>
-
