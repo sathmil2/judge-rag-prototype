@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+
+# Local prototype data. Do not commit real court/case files.
+data/
+
+# OS/editor files
+.DS_Store
+.vscode/
+.idea/
+

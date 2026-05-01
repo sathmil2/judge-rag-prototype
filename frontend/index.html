@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Judge RAG Prototype</title>
+    <link rel="stylesheet" href="/assets/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="workspace" aria-label="Case assistant workspace">
+        <aside class="sidebar">
+          <div class="brand">
+            <div class="mark">JR</div>
+            <div>
+              <h1>Judge RAG</h1>
+              <p>Document answers with page citations</p>
+            </div>
+          </div>
+
+          <form id="uploadForm" class="panel">
+            <h2>Case Document</h2>
+            <label>
+              <span>Case number</span>
+              <input name="caseNumber" placeholder="2026-DV-123" required />
+            </label>
+            <label>
+              <span>Document title</span>
+              <input name="documentTitle" placeholder="Petition for Order of Protection" />
+            </label>
+            <label>
+              <span>Filing date</span>
+              <input name="filingDate" type="date" />
+            </label>
+            <label class="dropzone">
+              <span>Upload file</span>
+              <input name="document" type="file" required />
+            </label>
+            <button type="submit">Upload and index</button>
+            <p id="uploadStatus" class="status"></p>
+          </form>
+
+          <section class="panel document-panel">
+            <h2>Indexed Documents</h2>
+            <div id="documentList" class="document-list"></div>
+          </section>
+        </aside>
+
+        <section class="main-panel">
+          <div class="question-bar">
+            <label>
+              <span>Ask about a case</span>
+              <input id="caseFilter" placeholder="Optional case number filter" />
+            </label>
+            <form id="askForm" class="ask-form">
+              <input id="questionInput" placeholder="What happened on March 12?" required />
+              <button type="submit">Ask</button>
+            </form>
+          </div>
+
+          <section class="answer-area">
+            <div class="answer-card">
+              <div class="answer-header">
+                <h2>Answer</h2>
+                <span id="modeBadge">keyword prototype</span>
+              </div>
+              <p id="answerText">Upload a document, then ask a question. Case-specific answers require cited source pages.</p>
+            </div>
+
+            <div class="citations-header">
+              <h2>Citations</h2>
+              <p id="guardrailText">No citation, no case-specific answer.</p>
+            </div>
+            <div id="citationList" class="citation-list"></div>
+          </section>
+        </section>
+      </section>
+    </main>
+
+    <dialog id="viewerDialog">
+      <div class="viewer-header">
+        <strong id="viewerTitle">Document viewer</strong>
+        <button id="closeViewer" type="button">Close</button>
+      </div>
+      <iframe id="viewerFrame" title="Document viewer"></iframe>
+    </dialog>
+
+    <script src="/assets/app.js"></script>
+  </body>
+</html>
+
