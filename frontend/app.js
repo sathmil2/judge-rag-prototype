@@ -12,6 +12,7 @@ const answerText = document.querySelector("#answerText");
 const citationList = document.querySelector("#citationList");
 const guardrailText = document.querySelector("#guardrailText");
 const modeBadge = document.querySelector("#modeBadge");
+const validationStatus = document.querySelector("#validationStatus");
 const viewerDialog = document.querySelector("#viewerDialog");
 const viewerFrame = document.querySelector("#viewerFrame");
 const viewerTitle = document.querySelector("#viewerTitle");
@@ -107,6 +108,18 @@ function renderCitations(citations) {
   }
 }
 
+function renderValidation(validation) {
+  if (!validation) {
+    validationStatus.textContent = "Validation has not run yet.";
+    validationStatus.className = "validation-status";
+    return;
+  }
+
+  const summary = `${validation.validCitationCount} of ${validation.totalCitationCount} citations validated`;
+  validationStatus.textContent = `${validation.status}: ${summary}`;
+  validationStatus.className = `validation-status ${validation.status === "passed" ? "valid" : "invalid"}`;
+}
+
 function escapeHtml(value) {
   return String(value ?? "")
     .replaceAll("&", "&amp;")
@@ -174,6 +187,7 @@ eventForm.addEventListener("submit", async (event) => {
 askForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   answerText.textContent = "Retrieving cited pages...";
+  renderValidation(null);
   citationList.innerHTML = "";
 
   try {
@@ -189,9 +203,11 @@ askForm.addEventListener("submit", async (event) => {
     answerText.textContent = payload.answer;
     guardrailText.textContent = payload.guardrail;
     modeBadge.textContent = payload.mode;
+    renderValidation(payload.validation);
     renderCitations(payload.citations);
   } catch (error) {
     answerText.textContent = error.message;
+    renderValidation(null);
     citationList.innerHTML = "";
   }
 });

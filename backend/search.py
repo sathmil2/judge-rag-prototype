@@ -170,9 +170,9 @@ def build_citations(results: list[SearchResult]) -> list[dict]:
             "fileUrl": f"/uploads/{source['sourceFile']}#page={source['pageNumber']}" if source["sourceFile"] else "",
             "sourceType": source["sourceType"],
             "sourceLabel": source["sourceLabel"],
+            "sourceText": source["chunkText"],
             "score": result.score,
             "matchedTerms": result.matchedTerms,
             "verified": snippet[:80].lower() in " ".join(source["chunkText"].split()).lower(),
         })
     return citations
-

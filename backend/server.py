@@ -4,6 +4,7 @@ import json
 import mimetypes
 import re
 import shutil
+import threading
 import time
 import uuid
 from dataclasses import asdict, dataclass
@@ -16,6 +17,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from ocr import extract_document
 from search import build_citations, retrieve_sources, summarize_answer
+from validation import strip_internal_source_text, validate_citations
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -23,6 +25,7 @@ FRONTEND_DIR = ROOT / "frontend"
 DATA_DIR = ROOT / "data"
 UPLOAD_DIR = DATA_DIR / "uploads"
 INDEX_FILE = DATA_DIR / "index.json"
+INDEX_LOCK = threading.Lock()
 
 
 @dataclass
@@ -55,7 +58,8 @@ def ensure_storage() -> None:
 
 def read_index() -> dict:
     ensure_storage()
-    index = json.loads(INDEX_FILE.read_text(encoding="utf-8"))
+    with INDEX_LOCK:
+        index = json.loads(INDEX_FILE.read_text(encoding="utf-8"))
     index.setdefault("documents", [])
     index.setdefault("chunks", [])
     index.setdefault("events", [])
@@ -65,9 +69,10 @@ def read_index() -> dict:
 
 def write_index(index: dict) -> None:
     ensure_storage()
-    tmp = INDEX_FILE.with_suffix(".tmp")
-    tmp.write_text(json.dumps(index, indent=2), encoding="utf-8")
-    tmp.replace(INDEX_FILE)
+    with INDEX_LOCK:
+        tmp = INDEX_FILE.with_name(f"{INDEX_FILE.stem}-{uuid.uuid4().hex}.tmp")
+        tmp.write_text(json.dumps(index, indent=2), encoding="utf-8")
+        tmp.replace(INDEX_FILE)
 
 
 def parse_multipart(headers, body: bytes) -> dict[str, dict]:
@@ -257,19 +262,26 @@ class Handler(BaseHTTPRequestHandler):
         results = retrieve_sources(index, question, case_number, source_filter)
         answer = summarize_answer(results)
         citations = build_citations(results)
+        validation = validate_citations(citations)
+        public_citations = strip_internal_source_text(citations)
+
+        if validation["status"] != "passed":
+            answer = "I could not produce a validated answer with cited source support."
 
         index["auditLog"].append({
             "timestamp": int(time.time()),
             "caseNumber": case_number,
             "question": question,
             "sourceFilter": source_filter,
-            "citations": citations,
+            "citations": public_citations,
+            "validation": validation,
         })
         write_index(index)
 
         self.send_json({
             "answer": answer,
-            "citations": citations,
+            "citations": public_citations,
+            "validation": validation,
             "mode": "modular-keyword-search",
             "guardrail": "No citation, no case-specific answer.",
         })

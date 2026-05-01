@@ -9,6 +9,7 @@ A small full-stack prototype for a court-document assistant:
 - Ask questions
 - Return source-backed citation cards from documents and events
 - Show retrieval scores and matched terms for debugging
+- Validate that citation snippets map back to stored source text
 - Open the cited document page
 
 This first version is intentionally dependency-light. The backend uses Python's standard library, and the frontend is plain HTML/CSS/JavaScript. It is designed as a learning scaffold that can later be upgraded to React, Spring Boot, OCR, vector search, and Azure/OpenAI services.

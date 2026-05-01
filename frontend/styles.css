@@ -237,6 +237,27 @@ h2 {
   line-height: 1.65;
 }
 
+.validation-status {
+  width: max-content;
+  max-width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  padding: 5px 10px;
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.validation-status.valid {
+  border-color: #8ab8a2;
+  color: #1f6f49;
+}
+
+.validation-status.invalid {
+  border-color: #d6a29d;
+  color: var(--danger);
+}
+
 .citation-card p {
   color: #333b39;
   line-height: 1.5;
