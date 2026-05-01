@@ -8,6 +8,7 @@ A small full-stack prototype for a court-document assistant:
 - Split text by page
 - Ask questions
 - Return source-backed citation cards from documents and events
+- Show retrieval scores and matched terms for debugging
 - Open the cited document page
 
 This first version is intentionally dependency-light. The backend uses Python's standard library, and the frontend is plain HTML/CSS/JavaScript. It is designed as a learning scaffold that can later be upgraded to React, Spring Boot, OCR, vector search, and Azure/OpenAI services.
@@ -75,7 +76,7 @@ The answer should cite both the uploaded sample document and the docket event wh
 
 ## Next Upgrades
 
-- Replace keyword scoring with hybrid search
+- Replace `backend/search.py` keyword scoring with hybrid search
 - Implement the Azure Document Intelligence call in `backend/ocr.py`
 - Store metadata in PostgreSQL
 - Add pgvector or Azure AI Search

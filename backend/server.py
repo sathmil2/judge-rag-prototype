@@ -15,6 +15,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 from ocr import extract_document
+from search import build_citations, retrieve_sources, summarize_answer
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -67,40 +68,6 @@ def write_index(index: dict) -> None:
     tmp = INDEX_FILE.with_suffix(".tmp")
     tmp.write_text(json.dumps(index, indent=2), encoding="utf-8")
     tmp.replace(INDEX_FILE)
-
-
-def tokenize(text: str) -> list[str]:
-    stop_words = {
-        "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "has", "in",
-        "is", "it", "of", "on", "or", "that", "the", "this", "to", "was", "were", "with",
-    }
-    return [word for word in re.findall(r"[a-z0-9]+", text.lower()) if word not in stop_words]
-
-
-def score_chunk(query_terms: list[str], chunk: dict) -> int:
-    text = chunk["chunkText"].lower()
-    title = chunk.get("documentTitle", chunk.get("eventType", "")).lower()
-    score = 0
-    for term in query_terms:
-        score += text.count(term)
-        if term in title:
-            score += 2
-    return score
-
-
-def summarize_answer(question: str, chunks: list[dict]) -> str:
-    if not chunks:
-        return "I could not find a cited source for that in the uploaded case documents."
-
-    snippets = []
-    for chunk in chunks[:3]:
-        text = " ".join(chunk["chunkText"].split())
-        snippets.append(text[:280] + ("..." if len(text) > 280 else ""))
-
-    return (
-        "Based on the retrieved case document pages, the most relevant source text says: "
-        + " ".join(snippets)
-    )
 
 
 def parse_multipart(headers, body: bytes) -> dict[str, dict]:
@@ -287,64 +254,9 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         index = read_index()
-        terms = tokenize(question)
-        candidates = []
-
-        if source_filter in {"all", "documents"}:
-            candidates.extend(
-                {
-                    **chunk,
-                    "sourceType": "case document",
-                    "sourceLabel": f"{chunk['documentTitle']}, page {chunk['pageNumber']}",
-                    "chunkText": chunk["chunkText"],
-                }
-                for chunk in index["chunks"]
-                if not case_number or chunk["caseNumber"].lower() == case_number.lower()
-            )
-
-        if source_filter in {"all", "events"}:
-            candidates.extend(
-                {
-                    **event,
-                    "sourceType": "docket event",
-                    "sourceLabel": event["eventType"],
-                    "documentId": event["eventId"],
-                    "documentTitle": event["eventType"],
-                    "filingDate": event["eventDate"],
-                    "pageNumber": None,
-                    "chunkText": event["eventText"],
-                    "viewerUrl": "",
-                    "sourceFile": "",
-                }
-                for event in index["events"]
-                if not case_number or event["caseNumber"].lower() == case_number.lower()
-            )
-
-        ranked = sorted(
-            ((score_chunk(terms, chunk), chunk) for chunk in candidates),
-            key=lambda pair: pair[0],
-            reverse=True,
-        )
-        matches = [chunk for score, chunk in ranked if score > 0][:5]
-
-        answer = summarize_answer(question, matches)
-        citations = []
-        for chunk in matches:
-            snippet = " ".join(chunk["chunkText"].split())[:420]
-            citation = {
-                "caseNumber": chunk["caseNumber"],
-                "documentId": chunk["documentId"],
-                "documentTitle": chunk["documentTitle"],
-                "filingDate": chunk["filingDate"],
-                "pageNumber": chunk["pageNumber"],
-                "snippet": snippet,
-                "viewerUrl": chunk["viewerUrl"],
-                "fileUrl": f"/uploads/{chunk['sourceFile']}#page={chunk['pageNumber']}" if chunk["sourceFile"] else "",
-                "sourceType": chunk["sourceType"],
-                "sourceLabel": chunk["sourceLabel"],
-                "verified": snippet[:80].lower() in " ".join(chunk["chunkText"].split()).lower(),
-            }
-            citations.append(citation)
+        results = retrieve_sources(index, question, case_number, source_filter)
+        answer = summarize_answer(results)
+        citations = build_citations(results)
 
         index["auditLog"].append({
             "timestamp": int(time.time()),
@@ -358,7 +270,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_json({
             "answer": answer,
             "citations": citations,
-            "mode": "keyword-prototype",
+            "mode": "modular-keyword-search",
             "guardrail": "No citation, no case-specific answer.",
         })
 

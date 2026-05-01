@@ -90,7 +90,8 @@ function renderCitations(citations) {
     card.className = "citation-card";
     card.innerHTML = `
       <strong>${escapeHtml(sourceLine)}</strong>
-      <span class="meta">${escapeHtml(citation.caseNumber)} · ${escapeHtml(formatDate(citation.filingDate))} · ${escapeHtml(citation.documentId)} · ${citation.verified ? "verified" : "needs review"}</span>
+      <span class="meta">${escapeHtml(citation.caseNumber)} · ${escapeHtml(formatDate(citation.filingDate))} · ${escapeHtml(citation.documentId)} · score ${citation.score ?? 0} · ${citation.verified ? "verified" : "needs review"}</span>
+      <span class="meta">Matched: ${escapeHtml((citation.matchedTerms || []).join(", ") || "source text")}</span>
       <p>${escapeHtml(citation.snippet)}</p>
       ${openButton}
     `;
