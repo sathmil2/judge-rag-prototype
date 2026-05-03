@@ -32,6 +32,7 @@ DATA_DIR = ROOT / "data"
 UPLOAD_DIR = DATA_DIR / "uploads"
 INDEX_FILE = DATA_DIR / "index.json"
 INDEX_LOCK = threading.Lock()
+DEFAULT_AUDIT_LIMIT = 100
 
 
 @dataclass
@@ -71,6 +72,14 @@ class LegalReference:
     sourceUrl: str
 
 
+@dataclass
+class UserIdentity:
+    userId: str
+    displayName: str
+    role: str
+    authSource: str
+
+
 def ensure_storage() -> None:
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     if not INDEX_FILE.exists():
@@ -95,6 +104,77 @@ def write_index(index: dict) -> None:
         tmp = INDEX_FILE.with_name(f"{INDEX_FILE.stem}-{uuid.uuid4().hex}.tmp")
         tmp.write_text(json.dumps(index, indent=2), encoding="utf-8")
         tmp.replace(INDEX_FILE)
+
+
+def clean_header(value: str, fallback: str = "") -> str:
+    cleaned = re.sub(r"[\r\n\t]+", " ", value or "").strip()
+    return cleaned[:120] if cleaned else fallback
+
+
+def current_user(headers) -> UserIdentity:
+    user_id = clean_header(headers.get("X-User-Id", ""), "anonymous")
+    display_name = clean_header(headers.get("X-User-Name", ""), user_id)
+    role = clean_header(headers.get("X-User-Role", ""), "prototype-user")
+    auth_source = clean_header(headers.get("X-Auth-Source", ""), "prototype-header")
+    return UserIdentity(
+        userId=user_id,
+        displayName=display_name,
+        role=role,
+        authSource=auth_source,
+    )
+
+
+def audit_event(
+    index: dict,
+    *,
+    action: str,
+    user: UserIdentity,
+    case_number: str = "",
+    resource_type: str = "",
+    resource_id: str = "",
+    resource_title: str = "",
+    outcome: str = "success",
+    details: dict | None = None,
+) -> dict:
+    event = {
+        "auditId": f"AUD-{uuid.uuid4().hex[:12].upper()}",
+        "timestamp": int(time.time()),
+        "timestampIso": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "user": asdict(user),
+        "action": action,
+        "caseNumber": case_number,
+        "resource": {
+            "type": resource_type,
+            "id": resource_id,
+            "title": resource_title,
+        },
+        "outcome": outcome,
+        "details": details or {},
+    }
+    index.setdefault("auditLog", []).append(event)
+    return event
+
+
+def audit_citation_summary(citations: list[dict]) -> list[dict]:
+    return [
+        {
+            "sourceType": citation.get("sourceType", ""),
+            "sourceLabel": citation.get("sourceLabel", ""),
+            "documentId": citation.get("documentId", ""),
+            "pageNumber": citation.get("pageNumber"),
+            "score": citation.get("score"),
+            "verified": citation.get("verified"),
+        }
+        for citation in citations
+    ]
+
+
+def parse_limit(value: str) -> int:
+    try:
+        limit = int(value)
+    except (TypeError, ValueError):
+        return DEFAULT_AUDIT_LIMIT
+    return max(1, min(limit, 500))
 
 
 def parse_multipart(headers, body: bytes) -> dict[str, dict]:
@@ -139,7 +219,20 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/audit":
-            self.send_json({"auditLog": read_index()["auditLog"][-50:]})
+            parsed_query = parse_qs(parsed.query)
+            case_number = parsed_query.get("caseNumber", [""])[0].strip().lower()
+            user_id = parsed_query.get("userId", [""])[0].strip().lower()
+            action = parsed_query.get("action", [""])[0].strip().lower()
+            limit = parse_limit(parsed_query.get("limit", [str(DEFAULT_AUDIT_LIMIT)])[0])
+
+            audit_log = read_index()["auditLog"]
+            if case_number:
+                audit_log = [entry for entry in audit_log if str(entry.get("caseNumber", "")).lower() == case_number]
+            if user_id:
+                audit_log = [entry for entry in audit_log if str(entry.get("user", {}).get("userId", "")).lower() == user_id]
+            if action:
+                audit_log = [entry for entry in audit_log if str(entry.get("action", "")).lower() == action]
+            self.send_json({"auditLog": audit_log[-limit:]})
             return
 
         if path == "/api/legal-references":
@@ -255,6 +348,23 @@ class Handler(BaseHTTPRequestHandler):
                 ocrWords=page.ocrWords,
             )))
 
+        audit_event(
+            index,
+            action="document.upload",
+            user=current_user(self.headers),
+            case_number=case_number,
+            resource_type="case-document",
+            resource_id=document_id,
+            resource_title=title,
+            details={
+                "sourceFile": saved_name,
+                "contentType": content_type,
+                "pageCount": document["pageCount"],
+                "ocrProvider": extraction.provider,
+                "ocrStatus": extraction.status,
+                "ocrWarnings": extraction.warnings,
+            },
+        )
         write_index(index)
         self.send_json({"document": document})
 
@@ -287,6 +397,19 @@ class Handler(BaseHTTPRequestHandler):
 
         index = read_index()
         index["events"].append(event)
+        audit_event(
+            index,
+            action="case-event.create",
+            user=current_user(self.headers),
+            case_number=case_number,
+            resource_type="case-event",
+            resource_id=event["eventId"],
+            resource_title=event_type,
+            details={
+                "eventDate": event_date,
+                "source": source,
+            },
+        )
         write_index(index)
         self.send_json({"event": event})
 
@@ -321,6 +444,20 @@ class Handler(BaseHTTPRequestHandler):
 
         index = read_index()
         index["legalReferences"].append(reference)
+        audit_event(
+            index,
+            action="legal-reference.create",
+            user=current_user(self.headers),
+            resource_type="legal-reference",
+            resource_id=reference["referenceId"],
+            resource_title=title,
+            details={
+                "citation": citation,
+                "jurisdiction": jurisdiction,
+                "effectiveDate": effective_date,
+                "sourceUrl": source_url,
+            },
+        )
         write_index(index)
         self.send_json({"legalReference": reference})
 
@@ -350,16 +487,25 @@ class Handler(BaseHTTPRequestHandler):
             answer_result.answer = "I could not produce a validated answer with cited source support."
             answer_result.status = validation["status"]
 
-        index["auditLog"].append({
-            "timestamp": int(time.time()),
-            "caseNumber": case_number,
-            "question": question,
-            "sourceFilter": source_filter,
-            "answerProvider": answer_result.provider,
-            "answerStatus": answer_result.status,
-            "citations": public_citations,
-            "validation": validation,
-        })
+        audit_event(
+            index,
+            action="assistant.ask",
+            user=current_user(self.headers),
+            case_number=case_number,
+            resource_type="assistant-answer",
+            resource_id=f"ANS-{uuid.uuid4().hex[:8].upper()}",
+            resource_title=question[:120],
+            outcome=validation["status"],
+            details={
+                "question": question,
+                "sourceFilter": source_filter,
+                "answerProvider": answer_result.provider,
+                "answerStatus": answer_result.status,
+                "validation": validation,
+                "citationCount": len(public_citations),
+                "citations": audit_citation_summary(public_citations),
+            },
+        )
         write_index(index)
 
         self.send_json({

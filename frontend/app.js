@@ -2,6 +2,9 @@ const uploadForm = document.querySelector("#uploadForm");
 const uploadStatus = document.querySelector("#uploadStatus");
 const documentList = document.querySelector("#documentList");
 const runtimeConfig = document.querySelector("#runtimeConfig");
+const auditUserId = document.querySelector("#auditUserId");
+const auditUserName = document.querySelector("#auditUserName");
+const auditUserRole = document.querySelector("#auditUserRole");
 const eventForm = document.querySelector("#eventForm");
 const eventStatus = document.querySelector("#eventStatus");
 const eventList = document.querySelector("#eventList");
@@ -16,6 +19,7 @@ const answerText = document.querySelector("#answerText");
 const citationList = document.querySelector("#citationList");
 const auditList = document.querySelector("#auditList");
 const refreshAudit = document.querySelector("#refreshAudit");
+const auditActionFilter = document.querySelector("#auditActionFilter");
 const guardrailText = document.querySelector("#guardrailText");
 const modeBadge = document.querySelector("#modeBadge");
 const validationStatus = document.querySelector("#validationStatus");
@@ -44,13 +48,56 @@ let activeOcrHighlights = [];
 let activeOcrPage = null;
 let activeRenderTask = null;
 
+const defaultIdentity = {
+  userId: "judge.demo",
+  displayName: "Demo Judge",
+  role: "judge",
+};
+
+loadIdentity();
+
 async function api(path, options = {}) {
-  const response = await fetch(path, options);
+  const response = await fetch(path, {
+    ...options,
+    headers: {
+      ...identityHeaders(),
+      ...(options.headers || {}),
+    },
+  });
   const payload = await response.json();
   if (!response.ok) {
     throw new Error(payload.error || "Request failed");
   }
   return payload;
+}
+
+function loadIdentity() {
+  const stored = JSON.parse(localStorage.getItem("judgeRagIdentity") || "null") || defaultIdentity;
+  auditUserId.value = stored.userId || defaultIdentity.userId;
+  auditUserName.value = stored.displayName || defaultIdentity.displayName;
+  auditUserRole.value = stored.role || defaultIdentity.role;
+}
+
+function saveIdentity() {
+  localStorage.setItem("judgeRagIdentity", JSON.stringify(currentIdentity()));
+}
+
+function currentIdentity() {
+  return {
+    userId: auditUserId.value.trim() || defaultIdentity.userId,
+    displayName: auditUserName.value.trim() || auditUserId.value.trim() || defaultIdentity.displayName,
+    role: auditUserRole.value || defaultIdentity.role,
+  };
+}
+
+function identityHeaders() {
+  const identity = currentIdentity();
+  return {
+    "X-User-Id": identity.userId,
+    "X-User-Name": identity.displayName,
+    "X-User-Role": identity.role,
+    "X-Auth-Source": "prototype-ui",
+  };
 }
 
 function formatDate(value) {
@@ -397,10 +444,18 @@ function renderAudit(auditLog) {
     const item = document.createElement("article");
     item.className = "citation-card audit-card";
     const date = new Date(entry.timestamp * 1000).toLocaleString();
+    const user = entry.user || {};
+    const resource = entry.resource || {};
+    const details = entry.details || {};
+    const title = entry.action === "assistant.ask"
+      ? details.question || resource.title || "Question"
+      : resource.title || entry.action || "Audit event";
+    const citationCount = details.citationCount ?? entry.citations?.length ?? 0;
     item.innerHTML = `
-      <strong>${escapeHtml(entry.question)}</strong>
-      <span class="meta">${escapeHtml(entry.caseNumber || "all cases")} · ${escapeHtml(entry.sourceFilter)} · ${escapeHtml(entry.validation?.status || "not validated")} · ${escapeHtml(entry.answerProvider || "unknown provider")} · ${escapeHtml(date)}</span>
-      <span class="meta">${entry.citations?.length || 0} citation${entry.citations?.length === 1 ? "" : "s"}</span>
+      <strong>${escapeHtml(title)}</strong>
+      <span class="meta">${escapeHtml(entry.action || "unknown action")} · ${escapeHtml(entry.outcome || "unknown")} · ${escapeHtml(date)}</span>
+      <span class="meta">${escapeHtml(user.displayName || user.userId || "unknown user")} · ${escapeHtml(user.role || "unknown role")} · ${escapeHtml(entry.caseNumber || "all cases")}</span>
+      <span class="meta">${escapeHtml(resource.type || "resource")} ${escapeHtml(resource.id || "")} · ${citationCount} citation${citationCount === 1 ? "" : "s"}</span>
     `;
     auditList.appendChild(item);
   }
@@ -436,7 +491,11 @@ async function loadLegalReferences() {
 }
 
 async function loadAudit() {
-  const payload = await api("/api/audit");
+  const params = new URLSearchParams({ limit: "100" });
+  if (auditActionFilter.value) {
+    params.set("action", auditActionFilter.value);
+  }
+  const payload = await api(`/api/audit?${params.toString()}`);
   renderAudit(payload.auditLog);
 }
 
@@ -577,6 +636,16 @@ refreshAudit.addEventListener("click", () => {
     auditList.innerHTML = `<p class="empty error">${escapeHtml(error.message)}</p>`;
   });
 });
+
+auditActionFilter.addEventListener("change", () => {
+  loadAudit().catch((error) => {
+    auditList.innerHTML = `<p class="empty error">${escapeHtml(error.message)}</p>`;
+  });
+});
+
+for (const input of [auditUserId, auditUserName, auditUserRole]) {
+  input.addEventListener("change", saveIdentity);
+}
 
 loadDocuments().catch((error) => {
   documentList.innerHTML = `<p class="empty error">${escapeHtml(error.message)}</p>`;

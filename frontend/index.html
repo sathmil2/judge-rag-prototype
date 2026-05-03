@@ -22,6 +22,27 @@
             Checking OCR mode...
           </section>
 
+          <section class="panel identity-panel">
+            <h2>Current User</h2>
+            <label>
+              <span>User ID</span>
+              <input id="auditUserId" placeholder="judge.chen" />
+            </label>
+            <label>
+              <span>Display name</span>
+              <input id="auditUserName" placeholder="Judge Chen" />
+            </label>
+            <label>
+              <span>Role</span>
+              <select id="auditUserRole">
+                <option value="judge">Judge</option>
+                <option value="clerk">Clerk</option>
+                <option value="admin">Admin</option>
+                <option value="prototype-user">Prototype user</option>
+              </select>
+            </label>
+          </section>
+
           <form id="uploadForm" class="panel">
             <h2>Case Document</h2>
             <label>
@@ -148,7 +169,19 @@
 
             <div class="citations-header">
               <h2>Audit Trail</h2>
-              <button id="refreshAudit" class="secondary-button" type="button">Refresh</button>
+              <div class="audit-actions">
+                <label>
+                  <span>Action</span>
+                  <select id="auditActionFilter">
+                    <option value="">All actions</option>
+                    <option value="assistant.ask">Questions</option>
+                    <option value="document.upload">Uploads</option>
+                    <option value="case-event.create">Docket events</option>
+                    <option value="legal-reference.create">Legal references</option>
+                  </select>
+                </label>
+                <button id="refreshAudit" class="secondary-button" type="button">Refresh</button>
+              </div>
             </div>
             <div id="auditList" class="citation-list"></div>
           </section>

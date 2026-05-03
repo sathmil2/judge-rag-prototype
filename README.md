@@ -15,6 +15,7 @@ A small full-stack prototype for a court-document assistant:
 - Generate answers through a separate answer provider layer
 - Open the cited document page
 - Preview PDF citations with PDF.js page navigation and snippet highlighting
+- Record production-style audit events with user identity
 
 This first version is intentionally dependency-light. The backend uses Python's standard library, and the frontend is plain HTML/CSS/JavaScript. It is designed as a learning scaffold that can later be upgraded to React, Spring Boot, OCR, vector search, and Azure/OpenAI services.
 
@@ -109,6 +110,33 @@ export AZURE_OPENAI_MODEL="YOUR-DEPLOYMENT-OR-MODEL"
 
 The app sends only the retrieved citation snippets to the LLM. If the LLM call fails or the key is missing, it falls back to extractive answers. Citation validation still runs before returning an answer.
 
+## Audit Identity
+
+The prototype records append-only audit events for:
+
+- document uploads
+- docket event creation
+- legal reference creation
+- assistant questions
+
+Each audit event includes timestamp, action, case number, resource metadata, outcome, details, and user identity. In the prototype UI, set the current user in the sidebar. In a production deployment, replace these prototype headers with identity from SSO/session middleware:
+
+```text
+X-User-Id: judge.chen
+X-User-Name: Judge Chen
+X-User-Role: judge
+X-Auth-Source: prototype-ui
+```
+
+Audit logs are available at:
+
+```text
+GET /api/audit?limit=100
+GET /api/audit?caseNumber=2026-DV-123
+GET /api/audit?action=assistant.ask
+GET /api/audit?userId=judge.chen
+```
+
 You can also add docket events and legal references in the sidebar, then ask questions across:
 
 - All sources
@@ -155,7 +183,6 @@ For production, replace the local vector scoring with pgvector, Azure AI Search,
 ## Next Upgrades
 
 - Replace local hashed vectors with pgvector or Azure AI Search embeddings
-- Implement the Azure Document Intelligence call in `backend/ocr.py`
 - Store metadata in PostgreSQL
 - Add pgvector or Azure AI Search
-- Add authentication, role-based case access, and audit logs
+- Add authentication and role-based case access
