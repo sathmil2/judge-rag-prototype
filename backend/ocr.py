@@ -43,6 +43,8 @@ class ExtractionResult:
 
 def extract_document(file_path: Path, content_type: str) -> ExtractionResult:
     provider = os.getenv("OCR_PROVIDER", "local").strip().lower()
+    if is_plain_text_file(file_path, content_type):
+        return extract_text_file(file_path)
     if provider == "azure":
         return extract_with_azure_placeholder(file_path, content_type)
     return extract_with_local_provider(file_path, content_type)
@@ -53,20 +55,8 @@ def extract_with_local_provider(file_path: Path, content_type: str) -> Extractio
     suffix = file_path.suffix.lower()
     warnings: list[str] = []
 
-    if content_type.startswith("text/") or suffix in {".txt", ".md", ".csv"}:
-        text = raw.decode("utf-8", errors="replace")
-        page_texts = [page.strip() for page in text.split("\f")]
-        pages = [
-            ExtractedPage(pageNumber=page_number, text=page_text, confidence=1.0)
-            for page_number, page_text in enumerate(page_texts, start=1)
-            if page_text
-        ]
-        return ExtractionResult(
-            pages=pages or [ExtractedPage(pageNumber=1, text=text.strip(), confidence=1.0)],
-            provider="local-text",
-            status="complete",
-            warnings=[],
-        )
+    if is_plain_text_file(file_path, content_type):
+        return extract_text_file(file_path)
 
     if suffix == ".pdf":
         return extract_pdf(file_path, raw)
@@ -80,6 +70,26 @@ def extract_with_local_provider(file_path: Path, content_type: str) -> Extractio
         provider="local-unsupported",
         status="needs_ocr",
         warnings=warnings,
+    )
+
+
+def is_plain_text_file(file_path: Path, content_type: str) -> bool:
+    return content_type.startswith("text/") or file_path.suffix.lower() in {".txt", ".md", ".csv"}
+
+
+def extract_text_file(file_path: Path) -> ExtractionResult:
+    text = file_path.read_text(encoding="utf-8", errors="replace")
+    page_texts = [page.strip() for page in text.split("\f")]
+    pages = [
+        ExtractedPage(pageNumber=page_number, text=page_text, confidence=1.0)
+        for page_number, page_text in enumerate(page_texts, start=1)
+        if page_text
+    ]
+    return ExtractionResult(
+        pages=pages or [ExtractedPage(pageNumber=1, text=text.strip(), confidence=1.0)],
+        provider="local-text",
+        status="complete",
+        warnings=[],
     )
 
 

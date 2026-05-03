@@ -22,7 +22,7 @@ load_dotenv()
 
 from answer import generate_answer
 from ocr import extract_document
-from search import build_citations, retrieve_sources
+from search import build_citations, index_chunks_if_configured, retrieve_sources
 from validation import strip_internal_source_text, validate_citations
 
 
@@ -249,6 +249,22 @@ class Handler(BaseHTTPRequestHandler):
                     "apiVersion": os.getenv("AZURE_DOCUMENT_INTELLIGENCE_API_VERSION", "2024-11-30"),
                     "localFallbackDisabled": os.getenv("OCR_PROVIDER", "local").strip().lower() == "azure",
                 },
+                "search": {
+                    "provider": os.getenv("SEARCH_PROVIDER", "local").strip().lower(),
+                    "azureSearchEndpointConfigured": bool(os.getenv("AZURE_SEARCH_ENDPOINT", "").strip()),
+                    "azureSearchKeyConfigured": bool(os.getenv("AZURE_SEARCH_KEY", "").strip()),
+                    "azureSearchIndex": os.getenv("AZURE_SEARCH_INDEX", "case-pages"),
+                    "embeddingProvider": os.getenv("EMBEDDING_PROVIDER", "auto"),
+                    "localEmbeddingFallback": os.getenv("EMBEDDING_ALLOW_LOCAL_FALLBACK", "true").strip().lower() in {"1", "true", "yes"},
+                    "embeddingProviderConfigured": bool(
+                        os.getenv("EMBEDDING_PROVIDER", "auto").strip().lower() == "local"
+                        or os.getenv("OPENAI_API_KEY", "").strip()
+                        or (
+                            os.getenv("AZURE_OPENAI_EMBEDDINGS_URL", "").strip()
+                            and os.getenv("AZURE_OPENAI_API_KEY", "").strip()
+                        )
+                    ),
+                },
             })
             return
 
@@ -328,12 +344,13 @@ class Handler(BaseHTTPRequestHandler):
             "uploadedAt": int(time.time()),
         }
         index["documents"].append(document)
+        new_chunks = []
 
         for page in extraction.pages:
             page_number = page.pageNumber
             page_text = page.text
             viewer_url = f"/document-viewer?case={case_number}&docId={document_id}&page={page_number}"
-            index["chunks"].append(asdict(PageChunk(
+            chunk = asdict(PageChunk(
                 caseNumber=case_number,
                 documentId=document_id,
                 documentTitle=title,
@@ -346,7 +363,11 @@ class Handler(BaseHTTPRequestHandler):
                 pageHeight=page.pageHeight,
                 pageUnit=page.pageUnit,
                 ocrWords=page.ocrWords,
-            )))
+            ))
+            index["chunks"].append(chunk)
+            new_chunks.append(chunk)
+
+        search_indexing = index_chunks_if_configured(new_chunks)
 
         audit_event(
             index,
@@ -363,6 +384,7 @@ class Handler(BaseHTTPRequestHandler):
                 "ocrProvider": extraction.provider,
                 "ocrStatus": extraction.status,
                 "ocrWarnings": extraction.warnings,
+                "searchIndexing": search_indexing,
             },
         )
         write_index(index)

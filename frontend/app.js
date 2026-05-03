@@ -131,11 +131,16 @@ function renderDocuments(documents) {
 
 function renderConfig(config) {
   const azure = config.azureDocumentIntelligence || {};
+  const search = config.search || {};
   const isAzure = config.ocrProvider === "azure";
   runtimeConfig.className = `config-banner ${isAzure ? "azure" : "local"}`;
-  runtimeConfig.textContent = isAzure
+  const ocrText = isAzure
     ? `OCR mode: Azure Document Intelligence (${azure.model || "prebuilt-read"}) · endpoint ${azure.endpointConfigured ? "set" : "missing"} · key ${azure.keyConfigured ? "set" : "missing"} · local fallback disabled`
     : `OCR mode: local · Tesseract/Poppler may be used when available`;
+  const searchText = search.provider === "azure"
+    ? `Search: Azure AI Search (${search.azureSearchIndex || "case-pages"}) · endpoint ${search.azureSearchEndpointConfigured ? "set" : "missing"} · key ${search.azureSearchKeyConfigured ? "set" : "missing"} · embeddings ${search.embeddingProviderConfigured ? "set" : "missing"} · provider ${search.embeddingProvider || "auto"}${search.localEmbeddingFallback ? " + local fallback" : ""}`
+    : "Search: local hybrid";
+  runtimeConfig.textContent = `${ocrText} · ${searchText}`;
 }
 
 function renderEvents(events) {

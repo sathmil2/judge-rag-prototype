@@ -1,8 +1,14 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import math
+import os
 import re
+import ssl
+import urllib.error
+import urllib.parse
+import urllib.request
 from collections import Counter
 from dataclasses import dataclass
 
@@ -24,9 +30,36 @@ class SearchResult:
     vectorScore: float
     matchedTerms: list[str]
     source: dict
+    searchMode: str = "hybrid-local"
 
 
 def retrieve_sources(
+    index: dict,
+    question: str,
+    case_number: str = "",
+    source_filter: str = "all",
+    limit: int = 5,
+) -> list[SearchResult]:
+    if search_provider() == "azure" and source_filter in {"all", "documents"}:
+        try:
+            azure_results = retrieve_sources_from_azure(question, case_number, limit)
+            enrich_results_from_local_index(index, azure_results)
+            if source_filter == "documents":
+                return azure_results
+            local_supplement = retrieve_sources_local(index, question, case_number, "events", limit=3)
+            local_supplement.extend(retrieve_sources_local(index, question, case_number, "law", limit=3))
+            return sorted(
+                azure_results + local_supplement,
+                key=lambda result: result.score,
+                reverse=True,
+            )[:limit]
+        except Exception:
+            return retrieve_sources_local(index, question, case_number, source_filter, limit)
+
+    return retrieve_sources_local(index, question, case_number, source_filter, limit)
+
+
+def retrieve_sources_local(
     index: dict,
     question: str,
     case_number: str = "",
@@ -51,6 +84,7 @@ def retrieve_sources(
                 vectorScore=vector_score,
                 matchedTerms=matched_terms,
                 source=record,
+                searchMode="hybrid-local",
             ))
 
     return sorted(
@@ -121,6 +155,322 @@ def build_search_records(index: dict, case_number: str, source_filter: str) -> l
             })
 
     return records
+
+
+def search_provider() -> str:
+    return os.getenv("SEARCH_PROVIDER", "local").strip().lower()
+
+
+def azure_search_configured() -> bool:
+    return all([
+        os.getenv("AZURE_SEARCH_ENDPOINT", "").strip(),
+        os.getenv("AZURE_SEARCH_KEY", "").strip(),
+        os.getenv("AZURE_SEARCH_INDEX", "").strip(),
+    ]) and embedding_configured()
+
+
+def embedding_configured() -> bool:
+    return embedding_provider() == "local" or bool(
+        os.getenv("OPENAI_API_KEY", "").strip()
+        or (
+            os.getenv("AZURE_OPENAI_EMBEDDINGS_URL", "").strip()
+            and os.getenv("AZURE_OPENAI_API_KEY", "").strip()
+        )
+    )
+
+
+def embedding_provider() -> str:
+    return os.getenv("EMBEDDING_PROVIDER", "auto").strip().lower()
+
+
+def azure_search_settings() -> dict:
+    return {
+        "endpoint": os.getenv("AZURE_SEARCH_ENDPOINT", "").strip().rstrip("/"),
+        "key": os.getenv("AZURE_SEARCH_KEY", "").strip(),
+        "index": os.getenv("AZURE_SEARCH_INDEX", "case-pages").strip(),
+        "apiVersion": os.getenv("AZURE_SEARCH_API_VERSION", "2025-09-01").strip(),
+        "embeddingDimensions": int(os.getenv("OPENAI_EMBEDDING_DIMENSIONS", "1536")),
+    }
+
+
+def enrich_results_from_local_index(index: dict, results: list[SearchResult]) -> None:
+    chunks_by_location = {
+        (chunk.get("documentId"), int(chunk.get("pageNumber") or 0)): chunk
+        for chunk in index.get("chunks", [])
+    }
+    for result in results:
+        key = (result.source.get("documentId"), int(result.source.get("pageNumber") or 0))
+        local_chunk = chunks_by_location.get(key)
+        if not local_chunk:
+            continue
+        result.source["ocrWords"] = local_chunk.get("ocrWords") or []
+        result.source["pageWidth"] = local_chunk.get("pageWidth")
+        result.source["pageHeight"] = local_chunk.get("pageHeight")
+        result.source["pageUnit"] = local_chunk.get("pageUnit", "")
+
+
+def index_chunks_if_configured(chunks: list[dict]) -> dict:
+    if search_provider() != "azure":
+        return {"provider": "local", "status": "skipped", "indexedCount": 0, "warnings": []}
+    if not azure_search_configured():
+        return {
+            "provider": "azure-ai-search",
+            "status": "skipped",
+            "indexedCount": 0,
+            "warnings": ["Azure AI Search or embedding settings are incomplete; local search remains available."],
+        }
+
+    try:
+        ensure_azure_search_index()
+        documents = []
+        for chunk in chunks:
+            text = chunk.get("chunkText", "")
+            documents.append({
+                "@search.action": "mergeOrUpload",
+                "id": azure_document_key(chunk),
+                "caseNumber": chunk.get("caseNumber", ""),
+                "documentId": chunk.get("documentId", ""),
+                "documentTitle": chunk.get("documentTitle", ""),
+                "filingDate": chunk.get("filingDate", ""),
+                "pageNumber": int(chunk.get("pageNumber") or 0),
+                "chunkText": text,
+                "sourceFile": chunk.get("sourceFile", ""),
+                "viewerUrl": chunk.get("viewerUrl", ""),
+                "pageWidth": number_or_zero(chunk.get("pageWidth")),
+                "pageHeight": number_or_zero(chunk.get("pageHeight")),
+                "pageUnit": chunk.get("pageUnit", ""),
+                "embedding": create_embedding(text),
+            })
+        upload_azure_documents(documents)
+        return {"provider": "azure-ai-search", "status": "complete", "indexedCount": len(documents), "warnings": []}
+    except urllib.error.HTTPError as error:
+        details = error.read().decode("utf-8", errors="replace")
+        return {
+            "provider": "azure-ai-search",
+            "status": "failed",
+            "indexedCount": 0,
+            "warnings": [f"Azure AI Search indexing failed: HTTP {error.code}: {details}"],
+        }
+    except Exception as error:
+        return {
+            "provider": "azure-ai-search",
+            "status": "failed",
+            "indexedCount": 0,
+            "warnings": [f"Azure AI Search indexing failed: {error}"],
+        }
+
+
+def ensure_azure_search_index() -> None:
+    settings = azure_search_settings()
+    path = f"/indexes/{urllib.parse.quote(settings['index'])}?api-version={urllib.parse.quote(settings['apiVersion'])}"
+    try:
+        azure_search_request("GET", path)
+        return
+    except urllib.error.HTTPError as error:
+        if error.code != 404:
+            raise
+
+    schema = {
+        "name": settings["index"],
+        "fields": [
+            {"name": "id", "type": "Edm.String", "key": True, "filterable": True},
+            {"name": "caseNumber", "type": "Edm.String", "filterable": True, "sortable": True},
+            {"name": "documentId", "type": "Edm.String", "filterable": True},
+            {"name": "documentTitle", "type": "Edm.String", "searchable": True, "filterable": True},
+            {"name": "filingDate", "type": "Edm.String", "filterable": True, "sortable": True},
+            {"name": "pageNumber", "type": "Edm.Int32", "filterable": True, "sortable": True},
+            {"name": "chunkText", "type": "Edm.String", "searchable": True},
+            {"name": "sourceFile", "type": "Edm.String", "filterable": True},
+            {"name": "viewerUrl", "type": "Edm.String"},
+            {"name": "pageWidth", "type": "Edm.Double"},
+            {"name": "pageHeight", "type": "Edm.Double"},
+            {"name": "pageUnit", "type": "Edm.String"},
+            {
+                "name": "embedding",
+                "type": "Collection(Edm.Single)",
+                "searchable": True,
+                "dimensions": settings["embeddingDimensions"],
+                "vectorSearchProfile": "case-page-vector-profile",
+            },
+        ],
+        "vectorSearch": {
+            "algorithms": [{"name": "case-page-hnsw", "kind": "hnsw"}],
+            "profiles": [{"name": "case-page-vector-profile", "algorithm": "case-page-hnsw"}],
+        },
+    }
+    azure_search_request("PUT", path, schema)
+
+
+def upload_azure_documents(documents: list[dict]) -> None:
+    if not documents:
+        return
+    settings = azure_search_settings()
+    path = f"/indexes/{urllib.parse.quote(settings['index'])}/docs/index?api-version={urllib.parse.quote(settings['apiVersion'])}"
+    azure_search_request("POST", path, {"value": documents})
+
+
+def retrieve_sources_from_azure(question: str, case_number: str, limit: int) -> list[SearchResult]:
+    settings = azure_search_settings()
+    query_embedding = create_embedding(question)
+    body = {
+        "search": question,
+        "top": limit,
+        "select": "caseNumber,documentId,documentTitle,filingDate,pageNumber,chunkText,sourceFile,viewerUrl,pageWidth,pageHeight,pageUnit",
+        "vectorQueries": [{
+            "kind": "vector",
+            "vector": query_embedding,
+            "fields": "embedding",
+            "k": limit,
+        }],
+    }
+    if case_number:
+        body["filter"] = f"caseNumber eq '{escape_odata_string(case_number)}'"
+
+    path = f"/indexes/{urllib.parse.quote(settings['index'])}/docs/search?api-version={urllib.parse.quote(settings['apiVersion'])}"
+    payload = azure_search_request("POST", path, body)
+    results = []
+    for item in payload.get("value", []):
+        source = {
+            "caseNumber": item.get("caseNumber", ""),
+            "documentId": item.get("documentId", ""),
+            "documentTitle": item.get("documentTitle", ""),
+            "filingDate": item.get("filingDate", ""),
+            "pageNumber": item.get("pageNumber"),
+            "chunkText": item.get("chunkText", ""),
+            "searchText": item.get("chunkText", ""),
+            "sourceFile": item.get("sourceFile", ""),
+            "viewerUrl": item.get("viewerUrl", ""),
+            "sourceType": "case document",
+            "sourceLabel": f"{item.get('documentTitle', '')}, page {item.get('pageNumber')}",
+            "pageWidth": item.get("pageWidth") or None,
+            "pageHeight": item.get("pageHeight") or None,
+            "pageUnit": item.get("pageUnit", ""),
+            "ocrWords": [],
+        }
+        score = float(item.get("@search.score", 0) or 0)
+        results.append(SearchResult(
+            score=round(score, 4),
+            keywordScore=score,
+            vectorScore=score,
+            matchedTerms=tokenize(question)[:8],
+            source=source,
+            searchMode="azure-ai-search-hybrid",
+        ))
+    return results
+
+
+def azure_search_request(method: str, path: str, payload: dict | None = None) -> dict:
+    settings = azure_search_settings()
+    data = json.dumps(payload).encode("utf-8") if payload is not None else None
+    request = urllib.request.Request(
+        f"{settings['endpoint']}{path}",
+        data=data,
+        headers={
+            "api-key": settings["key"],
+            "Content-Type": "application/json",
+        },
+        method=method,
+    )
+    with urllib.request.urlopen(request, timeout=60, context=ssl_context()) as response:
+        raw = response.read()
+    return json.loads(raw.decode("utf-8")) if raw else {}
+
+
+def create_embedding(text: str) -> list[float]:
+    if embedding_provider() == "local":
+        return local_hash_embedding(text)
+
+    azure_url = os.getenv("AZURE_OPENAI_EMBEDDINGS_URL", "").strip()
+    azure_key = os.getenv("AZURE_OPENAI_API_KEY", "").strip()
+    try:
+        if azure_url and azure_key:
+            return create_azure_openai_embedding(text, azure_url, azure_key)
+        return create_openai_embedding(text)
+    except (urllib.error.HTTPError, urllib.error.URLError, RuntimeError, OSError):
+        if os.getenv("EMBEDDING_ALLOW_LOCAL_FALLBACK", "true").strip().lower() in {"1", "true", "yes"}:
+            return local_hash_embedding(text)
+        raise
+
+
+def local_hash_embedding(text: str) -> list[float]:
+    dimensions = azure_search_settings()["embeddingDimensions"]
+    features = vector_features(text)
+    vector = [0.0] * dimensions
+    for token, count in features.items():
+        digest = hashlib.blake2b(token.encode("utf-8"), digest_size=4).digest()
+        bucket = int.from_bytes(digest, "big") % dimensions
+        vector[bucket] += 1.0 + math.log(count)
+    return normalize_vector(vector)
+
+
+def create_openai_embedding(text: str) -> list[float]:
+    key = os.getenv("OPENAI_API_KEY", "").strip()
+    if not key:
+        raise RuntimeError("OPENAI_API_KEY is required for Azure AI Search embeddings.")
+    model = os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small").strip()
+    body = {"model": model, "input": text[:24000]}
+    request = urllib.request.Request(
+        "https://api.openai.com/v1/embeddings",
+        data=json.dumps(body).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=60, context=ssl_context()) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    return payload["data"][0]["embedding"]
+
+
+def create_azure_openai_embedding(text: str, url: str, key: str) -> list[float]:
+    model = os.getenv("AZURE_OPENAI_EMBEDDING_MODEL", "").strip()
+    body = {"input": text[:24000]}
+    if model:
+        body["model"] = model
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(body).encode("utf-8"),
+        headers={
+            "api-key": key,
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=60, context=ssl_context()) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    return payload["data"][0]["embedding"]
+
+
+def ssl_context() -> ssl.SSLContext:
+    ca_bundle = os.getenv("AZURE_CA_BUNDLE", "").strip()
+    verify_ssl = os.getenv("AZURE_VERIFY_SSL", "true").strip().lower()
+    if verify_ssl in {"0", "false", "no"}:
+        return ssl._create_unverified_context()
+    if ca_bundle:
+        return ssl.create_default_context(cafile=ca_bundle)
+    try:
+        import certifi
+
+        return ssl.create_default_context(cafile=certifi.where())
+    except ImportError:
+        return ssl.create_default_context()
+
+
+def azure_document_key(chunk: dict) -> str:
+    raw = f"{chunk.get('caseNumber', '')}-{chunk.get('documentId', '')}-{chunk.get('pageNumber', '')}"
+    return re.sub(r"[^A-Za-z0-9_-]", "_", raw)[:180]
+
+
+def escape_odata_string(value: str) -> str:
+    return value.replace("'", "''")
+
+
+def number_or_zero(value) -> float:
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def tokenize(text: str) -> list[str]:
@@ -243,7 +593,7 @@ def build_citations(results: list[SearchResult]) -> list[dict]:
             "score": result.score,
             "keywordScore": result.keywordScore,
             "vectorScore": result.vectorScore,
-            "searchMode": "hybrid",
+            "searchMode": result.searchMode,
             "matchedTerms": result.matchedTerms,
             "verified": snippet[:80].lower() in " ".join(source["chunkText"].split()).lower(),
         })

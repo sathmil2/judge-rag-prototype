@@ -31,6 +31,16 @@ Then open:
 http://localhost:8000
 ```
 
+## Test
+
+Run the automated backend tests with:
+
+```bash
+python3 -m unittest discover -s tests
+```
+
+The tests cover OCR provider routing, local hybrid search, Azure Search fallback behavior, citation validation, and audit identity helpers. They use Python's built-in `unittest` module and do not require live Azure/OpenAI calls.
+
 ## Try It
 
 Upload a `.txt` file first. Use form-feed characters to separate pages if you want page mapping:
@@ -178,7 +188,46 @@ It currently uses dependency-free hybrid search:
 - local hashed vector scoring for broader semantic overlap
 - combined hybrid score for ranking
 
-For production, replace the local vector scoring with pgvector, Azure AI Search, Elasticsearch, or OpenSearch.
+For production-style hybrid search, set `SEARCH_PROVIDER=azure` to use Azure AI Search. The app will create the search index if it does not exist, upload page chunks when documents are indexed, create embeddings for each page, and query Azure AI Search with both keyword text and a vector query.
+
+Required Azure AI Search settings:
+
+```bash
+export SEARCH_PROVIDER=azure
+export AZURE_SEARCH_ENDPOINT="https://YOUR-SEARCH-SERVICE.search.windows.net"
+export AZURE_SEARCH_KEY="YOUR-SEARCH-ADMIN-KEY"
+export AZURE_SEARCH_INDEX="case-pages"
+export AZURE_SEARCH_API_VERSION="2025-09-01"
+```
+
+Use OpenAI embeddings:
+
+```bash
+export OPENAI_API_KEY="YOUR-OPENAI-KEY"
+export OPENAI_EMBEDDING_MODEL="text-embedding-3-small"
+export OPENAI_EMBEDDING_DIMENSIONS=1536
+export EMBEDDING_PROVIDER=auto
+export EMBEDDING_ALLOW_LOCAL_FALLBACK=true
+```
+
+Or use Azure OpenAI embeddings:
+
+```bash
+export AZURE_OPENAI_API_KEY="YOUR-AZURE-OPENAI-KEY"
+export AZURE_OPENAI_EMBEDDINGS_URL="https://YOUR-AZURE-OPENAI-RESOURCE.openai.azure.com/openai/deployments/YOUR-EMBEDDING-DEPLOYMENT/embeddings?api-version=YOUR-API-VERSION"
+export AZURE_OPENAI_EMBEDDING_MODEL="YOUR-EMBEDDING-DEPLOYMENT"
+export OPENAI_EMBEDDING_DIMENSIONS=1536
+```
+
+After enabling Azure AI Search, re-upload documents so their page chunks are sent to the Azure index. If Azure Search or embeddings are not configured, the app falls back to the local hybrid search.
+
+For prototype testing without OpenAI quota, set:
+
+```bash
+export EMBEDDING_PROVIDER=local
+```
+
+This uses deterministic local hash embeddings inside Azure AI Search. It is useful for testing the Azure Search pipeline, but use OpenAI or Azure OpenAI embeddings for real semantic retrieval.
 
 ## Next Upgrades
 
