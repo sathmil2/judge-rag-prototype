@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import ssl
 import subprocess
 import tempfile
 import time
@@ -18,6 +19,10 @@ class ExtractedPage:
     pageNumber: int
     text: str
     confidence: float | None = None
+    pageWidth: float | None = None
+    pageHeight: float | None = None
+    pageUnit: str = ""
+    ocrWords: list[dict] | None = None
 
 
 @dataclass
@@ -240,11 +245,14 @@ def extract_with_azure_placeholder(file_path: Path, content_type: str) -> Extrac
     timeout_seconds = float(os.getenv("AZURE_DOCUMENT_INTELLIGENCE_TIMEOUT_SECONDS", "90"))
 
     if not endpoint or not key:
-        result = extract_with_local_provider(file_path, content_type)
-        result.warnings.append(
-            "OCR_PROVIDER=azure is set, but Azure Document Intelligence endpoint/key are missing."
+        return ExtractionResult(
+            pages=[ExtractedPage(pageNumber=1, text="Azure OCR was requested, but Azure credentials are missing.")],
+            provider=f"azure-document-intelligence:{model_id}",
+            status="needs_ocr",
+            warnings=[
+                "OCR_PROVIDER=azure is set, so local OCR fallback is disabled. Set AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT and AZURE_DOCUMENT_INTELLIGENCE_KEY."
+            ],
         )
-        return result
 
     try:
         analyze_url = build_azure_analyze_url(endpoint, model_id, api_version)
@@ -293,7 +301,7 @@ def submit_azure_analyze_request(analyze_url: str, key: str, file_path: Path, co
         headers=headers,
         method="POST",
     )
-    with urllib.request.urlopen(request, timeout=60) as response:
+    with urllib.request.urlopen(request, timeout=60, context=azure_ssl_context()) as response:
         operation_url = response.headers.get("Operation-Location")
         if not operation_url:
             raise OSError("Azure response did not include Operation-Location.")
@@ -311,7 +319,7 @@ def poll_azure_analyze_result(
 
     while time.monotonic() < deadline:
         request = urllib.request.Request(operation_url, headers=headers, method="GET")
-        with urllib.request.urlopen(request, timeout=60) as response:
+        with urllib.request.urlopen(request, timeout=60, context=azure_ssl_context()) as response:
             payload = json_loads(response.read())
 
         status = payload.get("status", "").lower()
@@ -322,6 +330,24 @@ def poll_azure_analyze_result(
         time.sleep(poll_seconds)
 
     raise TimeoutError(f"Azure analysis did not finish within {timeout_seconds:g} seconds.")
+
+
+def azure_ssl_context() -> ssl.SSLContext:
+    ca_bundle = os.getenv("AZURE_CA_BUNDLE", "").strip()
+    verify_ssl = os.getenv("AZURE_VERIFY_SSL", "true").strip().lower()
+
+    if verify_ssl in {"0", "false", "no"}:
+        return ssl._create_unverified_context()
+
+    if ca_bundle:
+        return ssl.create_default_context(cafile=ca_bundle)
+
+    try:
+        import certifi
+
+        return ssl.create_default_context(cafile=certifi.where())
+    except ImportError:
+        return ssl.create_default_context()
 
 
 def pages_from_azure_result(payload: dict) -> list[ExtractedPage]:
@@ -339,12 +365,59 @@ def pages_from_azure_result(payload: dict) -> list[ExtractedPage]:
             pageNumber=page.get("pageNumber", page_index),
             text=page_text.strip(),
             confidence=average_word_confidence(page.get("words", [])),
+            pageWidth=number_or_none(page.get("width")),
+            pageHeight=number_or_none(page.get("height")),
+            pageUnit=str(page.get("unit", "")),
+            ocrWords=normalize_azure_words(page.get("words", [])),
         ))
 
     if not extracted_pages and content.strip():
         extracted_pages.append(ExtractedPage(pageNumber=1, text=content.strip(), confidence=None))
 
     return [page for page in extracted_pages if page.text]
+
+
+def normalize_azure_words(words: list[dict]) -> list[dict]:
+    normalized_words = []
+    for word in words:
+        text = str(word.get("content", "")).strip()
+        polygon = normalize_polygon(word.get("polygon", []))
+        if not text or not polygon:
+            continue
+        normalized_words.append({
+            "text": text,
+            "polygon": polygon,
+            "confidence": word.get("confidence"),
+        })
+    return normalized_words
+
+
+def normalize_polygon(polygon: list) -> list[dict]:
+    if not polygon:
+        return []
+
+    if all(isinstance(point, dict) for point in polygon):
+        points = [
+            {"x": number_or_none(point.get("x")), "y": number_or_none(point.get("y"))}
+            for point in polygon
+        ]
+    else:
+        points = []
+        for index in range(0, len(polygon) - 1, 2):
+            points.append({"x": number_or_none(polygon[index]), "y": number_or_none(polygon[index + 1])})
+
+    return [
+        {"x": point["x"], "y": point["y"]}
+        for point in points
+        if point["x"] is not None and point["y"] is not None
+    ]
+
+
+def number_or_none(value) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def text_from_spans(content: str, spans: list[dict]) -> str:

@@ -1,5 +1,6 @@
 __pycache__/
 *.pyc
+.env
 
 # Local prototype data. Do not commit real court/case files.
 data/
@@ -8,4 +9,3 @@ data/
 .DS_Store
 .vscode/
 .idea/
-

@@ -1,6 +1,7 @@
 const uploadForm = document.querySelector("#uploadForm");
 const uploadStatus = document.querySelector("#uploadStatus");
 const documentList = document.querySelector("#documentList");
+const runtimeConfig = document.querySelector("#runtimeConfig");
 const eventForm = document.querySelector("#eventForm");
 const eventStatus = document.querySelector("#eventStatus");
 const eventList = document.querySelector("#eventList");
@@ -23,6 +24,25 @@ const viewerDialog = document.querySelector("#viewerDialog");
 const viewerFrame = document.querySelector("#viewerFrame");
 const viewerTitle = document.querySelector("#viewerTitle");
 const closeViewer = document.querySelector("#closeViewer");
+const previousPage = document.querySelector("#previousPage");
+const nextPage = document.querySelector("#nextPage");
+const pageIndicator = document.querySelector("#pageIndicator");
+const viewerStatus = document.querySelector("#viewerStatus");
+const pdfViewer = document.querySelector("#pdfViewer");
+const pdfPage = document.querySelector("#pdfPage");
+const pdfCanvas = document.querySelector("#pdfCanvas");
+const highlightLayer = document.querySelector("#highlightLayer");
+
+const PDFJS_URL = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.mjs";
+const PDFJS_WORKER_URL = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.worker.min.mjs";
+
+let pdfjsLibPromise = null;
+let activePdf = null;
+let activePageNumber = 1;
+let activeHighlightText = "";
+let activeOcrHighlights = [];
+let activeOcrPage = null;
+let activeRenderTask = null;
 
 async function api(path, options = {}) {
   const response = await fetch(path, options);
@@ -60,6 +80,15 @@ function renderDocuments(documents) {
     `;
     documentList.appendChild(item);
   }
+}
+
+function renderConfig(config) {
+  const azure = config.azureDocumentIntelligence || {};
+  const isAzure = config.ocrProvider === "azure";
+  runtimeConfig.className = `config-banner ${isAzure ? "azure" : "local"}`;
+  runtimeConfig.textContent = isAzure
+    ? `OCR mode: Azure Document Intelligence (${azure.model || "prebuilt-read"}) · endpoint ${azure.endpointConfigured ? "set" : "missing"} · key ${azure.keyConfigured ? "set" : "missing"} · local fallback disabled`
+    : `OCR mode: local · Tesseract/Poppler may be used when available`;
 }
 
 function renderEvents(events) {
@@ -111,7 +140,7 @@ function renderCitations(citations) {
     const sourceLine = citation.sourceType === "case document"
       ? `${citation.sourceType} · ${citation.documentTitle}, page ${citation.pageNumber}`
       : `${citation.sourceType} · ${citation.sourceLabel}`;
-    const openButton = citation.fileUrl || citation.viewerUrl ? `<button type="button">Open source</button>` : "";
+    const openButton = citation.fileUrl || citation.viewerUrl ? `<button type="button">Open cited page</button>` : "";
     const card = document.createElement("article");
     card.className = "citation-card";
     card.innerHTML = `
@@ -125,17 +154,213 @@ function renderCitations(citations) {
     const openCitation = card.querySelector("button");
     if (openCitation) {
       openCitation.addEventListener("click", () => {
-        if (citation.fileUrl) {
-          viewerTitle.textContent = `${citation.documentTitle} · page ${citation.pageNumber}`;
-          viewerFrame.src = citation.fileUrl;
-          viewerDialog.showModal();
-        } else if (citation.viewerUrl) {
-          window.open(citation.viewerUrl, "_blank", "noopener");
-        }
+        openCitationSource(citation);
       });
     }
     citationList.appendChild(card);
   }
+}
+
+async function openCitationSource(citation) {
+  if (!citation.fileUrl && citation.viewerUrl) {
+    window.open(citation.viewerUrl, "_blank", "noopener");
+    return;
+  }
+
+  const fileUrl = citation.fileUrl || "";
+  const cleanUrl = fileUrl.split("#")[0];
+  const isPdf = cleanUrl.toLowerCase().includes(".pdf");
+
+  viewerTitle.textContent = `${citation.documentTitle} · page ${citation.pageNumber || 1}`;
+  activePageNumber = Number(citation.pageNumber || 1);
+  activeHighlightText = citation.snippet || citation.sourceText || "";
+  activeOcrHighlights = citation.ocrHighlights || [];
+  activeOcrPage = {
+    width: Number(citation.pageWidth || 0),
+    height: Number(citation.pageHeight || 0),
+    unit: citation.pageUnit || "",
+  };
+  viewerDialog.showModal();
+
+  if (!isPdf) {
+    showFrameViewer(fileUrl || citation.viewerUrl);
+    return;
+  }
+
+  try {
+    showPdfViewer();
+    viewerStatus.textContent = "Loading PDF page...";
+    const pdfjsLib = await loadPdfJs();
+    activePdf = await pdfjsLib.getDocument(cleanUrl).promise;
+    activePageNumber = clamp(activePageNumber, 1, activePdf.numPages);
+    await renderPdfPage(activePageNumber);
+  } catch (error) {
+    showFrameViewer(fileUrl);
+    viewerStatus.textContent = `PDF.js preview failed, showing browser preview instead. ${error.message}`;
+  }
+}
+
+async function loadPdfJs() {
+  if (!pdfjsLibPromise) {
+    pdfjsLibPromise = import(PDFJS_URL).then((module) => {
+      module.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_URL;
+      window.pdfjsLib = module;
+      return module;
+    });
+  }
+  return pdfjsLibPromise;
+}
+
+function showPdfViewer() {
+  viewerFrame.hidden = true;
+  viewerFrame.src = "about:blank";
+  pdfViewer.hidden = false;
+  viewerStatus.hidden = false;
+  previousPage.hidden = false;
+  nextPage.hidden = false;
+  pageIndicator.hidden = false;
+}
+
+function showFrameViewer(url) {
+  activePdf = null;
+  pdfViewer.hidden = true;
+  viewerFrame.hidden = false;
+  viewerFrame.src = url;
+  viewerStatus.hidden = false;
+  previousPage.hidden = true;
+  nextPage.hidden = true;
+  pageIndicator.hidden = true;
+}
+
+async function renderPdfPage(pageNumber) {
+  if (!activePdf) return;
+
+  if (activeRenderTask) {
+    activeRenderTask.cancel();
+    activeRenderTask = null;
+  }
+
+  highlightLayer.innerHTML = "";
+  viewerStatus.textContent = "Rendering page...";
+  activePageNumber = clamp(pageNumber, 1, activePdf.numPages);
+
+  const page = await activePdf.getPage(activePageNumber);
+  const containerWidth = Math.min(pdfViewer.clientWidth - 32, 960);
+  const unscaledViewport = page.getViewport({ scale: 1 });
+  const scale = Math.max(0.6, Math.min(1.7, containerWidth / unscaledViewport.width));
+  const viewport = page.getViewport({ scale });
+  const context = pdfCanvas.getContext("2d");
+
+  pdfCanvas.width = Math.floor(viewport.width);
+  pdfCanvas.height = Math.floor(viewport.height);
+  pdfCanvas.style.width = `${Math.floor(viewport.width)}px`;
+  pdfCanvas.style.height = `${Math.floor(viewport.height)}px`;
+  pdfPage.style.width = `${Math.floor(viewport.width)}px`;
+  pdfPage.style.height = `${Math.floor(viewport.height)}px`;
+  highlightLayer.style.width = `${Math.floor(viewport.width)}px`;
+  highlightLayer.style.height = `${Math.floor(viewport.height)}px`;
+
+  activeRenderTask = page.render({ canvasContext: context, viewport });
+  await activeRenderTask.promise;
+  activeRenderTask = null;
+
+  const textContent = await page.getTextContent();
+  renderHighlights(textContent.items, viewport, activeHighlightText);
+  if (!highlightLayer.children.length) {
+    renderOcrHighlights(activeOcrHighlights, activeOcrPage);
+  }
+  pageIndicator.textContent = `Page ${activePageNumber} of ${activePdf.numPages}`;
+  previousPage.disabled = activePageNumber <= 1;
+  nextPage.disabled = activePageNumber >= activePdf.numPages;
+  viewerStatus.textContent = highlightLayer.children.length
+    ? "Highlighted matching citation text on this page."
+    : "Page rendered. No exact text or OCR highlight match found for the citation snippet.";
+}
+
+function renderHighlights(textItems, viewport, snippet) {
+  const terms = importantTerms(snippet);
+  if (!terms.size) return;
+
+  for (const item of textItems) {
+    const itemTerms = importantTerms(item.str);
+    const overlap = [...itemTerms].filter((term) => terms.has(term));
+    if (!overlap.length) continue;
+
+    const rect = textItemRect(item, viewport);
+    if (!rect.width || !rect.height) continue;
+
+    const mark = document.createElement("span");
+    mark.className = "pdf-highlight";
+    mark.style.left = `${rect.left}px`;
+    mark.style.top = `${rect.top}px`;
+    mark.style.width = `${rect.width}px`;
+    mark.style.height = `${rect.height}px`;
+    highlightLayer.appendChild(mark);
+  }
+}
+
+function textItemRect(item, viewport) {
+  const tx = window.pdfjsLib
+    ? window.pdfjsLib.Util.transform(viewport.transform, item.transform)
+    : null;
+  if (!tx) {
+    return { left: 0, top: 0, width: 0, height: 0 };
+  }
+
+  const height = Math.max(Math.hypot(tx[2], tx[3]), (item.height || 10) * viewport.scale);
+  const width = Math.max((item.width || 0) * viewport.scale, 4);
+  return {
+    left: tx[4],
+    top: tx[5] - height,
+    width,
+    height: Math.max(height, 8),
+  };
+}
+
+function renderOcrHighlights(highlights, pageInfo) {
+  if (!highlights?.length || !pageInfo?.width || !pageInfo?.height) return;
+
+  const xScale = pdfCanvas.width / pageInfo.width;
+  const yScale = pdfCanvas.height / pageInfo.height;
+
+  for (const highlight of highlights) {
+    const polygon = highlight.polygon || [];
+    if (!polygon.length) continue;
+
+    const xs = polygon.map((point) => Number(point.x)).filter(Number.isFinite);
+    const ys = polygon.map((point) => Number(point.y)).filter(Number.isFinite);
+    if (!xs.length || !ys.length) continue;
+
+    const left = Math.min(...xs) * xScale;
+    const top = Math.min(...ys) * yScale;
+    const width = (Math.max(...xs) - Math.min(...xs)) * xScale;
+    const height = (Math.max(...ys) - Math.min(...ys)) * yScale;
+    if (width <= 0 || height <= 0) continue;
+
+    const mark = document.createElement("span");
+    mark.className = "pdf-highlight ocr-highlight";
+    mark.title = highlight.text || "OCR highlight";
+    mark.style.left = `${left}px`;
+    mark.style.top = `${top}px`;
+    mark.style.width = `${width}px`;
+    mark.style.height = `${Math.max(height, 8)}px`;
+    highlightLayer.appendChild(mark);
+  }
+}
+
+function importantTerms(text) {
+  const stopWords = new Set(["the", "and", "for", "with", "that", "this", "from", "page", "source", "case", "document"]);
+  return new Set(
+    String(text || "")
+      .toLowerCase()
+      .match(/[a-z0-9]{3,}/g)
+      ?.filter((term) => !stopWords.has(term))
+      .slice(0, 80) || []
+  );
+}
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
 }
 
 function renderValidation(validation) {
@@ -213,6 +438,11 @@ async function loadLegalReferences() {
 async function loadAudit() {
   const payload = await api("/api/audit");
   renderAudit(payload.auditLog);
+}
+
+async function loadConfig() {
+  const payload = await api("/api/config");
+  renderConfig(payload);
 }
 
 uploadForm.addEventListener("submit", async (event) => {
@@ -322,6 +552,24 @@ askForm.addEventListener("submit", async (event) => {
 closeViewer.addEventListener("click", () => {
   viewerDialog.close();
   viewerFrame.src = "about:blank";
+  activePdf = null;
+  highlightLayer.innerHTML = "";
+  activeHighlightText = "";
+  activeOcrHighlights = [];
+  activeOcrPage = null;
+  activeRenderTask = null;
+});
+
+previousPage.addEventListener("click", () => {
+  renderPdfPage(activePageNumber - 1).catch((error) => {
+    viewerStatus.textContent = error.message;
+  });
+});
+
+nextPage.addEventListener("click", () => {
+  renderPdfPage(activePageNumber + 1).catch((error) => {
+    viewerStatus.textContent = error.message;
+  });
 });
 
 refreshAudit.addEventListener("click", () => {
@@ -332,6 +580,11 @@ refreshAudit.addEventListener("click", () => {
 
 loadDocuments().catch((error) => {
   documentList.innerHTML = `<p class="empty error">${escapeHtml(error.message)}</p>`;
+});
+
+loadConfig().catch((error) => {
+  runtimeConfig.className = "config-banner local";
+  runtimeConfig.textContent = `Could not load OCR mode: ${error.message}`;
 });
 
 loadEvents().catch((error) => {

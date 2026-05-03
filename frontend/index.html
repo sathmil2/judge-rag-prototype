@@ -18,6 +18,10 @@
             </div>
           </div>
 
+          <section id="runtimeConfig" class="config-banner">
+            Checking OCR mode...
+          </section>
+
           <form id="uploadForm" class="panel">
             <h2>Case Document</h2>
             <label>
@@ -155,9 +159,21 @@
     <dialog id="viewerDialog">
       <div class="viewer-header">
         <strong id="viewerTitle">Document viewer</strong>
-        <button id="closeViewer" type="button">Close</button>
+        <div class="viewer-actions">
+          <button id="previousPage" class="secondary-button" type="button" aria-label="Previous page">Prev</button>
+          <span id="pageIndicator">Page -</span>
+          <button id="nextPage" class="secondary-button" type="button" aria-label="Next page">Next</button>
+          <button id="closeViewer" type="button">Close</button>
+        </div>
       </div>
-      <iframe id="viewerFrame" title="Document viewer"></iframe>
+      <div id="viewerStatus" class="viewer-status" hidden>Select a PDF citation to preview it here.</div>
+      <div id="pdfViewer" class="pdf-viewer" aria-label="PDF page viewer" hidden>
+        <div id="pdfPage" class="pdf-page">
+          <canvas id="pdfCanvas"></canvas>
+          <div id="highlightLayer" class="highlight-layer"></div>
+        </div>
+      </div>
+      <iframe id="viewerFrame" title="Document viewer" hidden></iframe>
     </dialog>
 
     <script src="/assets/app.js"></script>

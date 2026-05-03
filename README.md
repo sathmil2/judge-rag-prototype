@@ -14,6 +14,7 @@ A small full-stack prototype for a court-document assistant:
 - Validate that citation snippets map back to stored source text
 - Generate answers through a separate answer provider layer
 - Open the cited document page
+- Preview PDF citations with PDF.js page navigation and snippet highlighting
 
 This first version is intentionally dependency-light. The backend uses Python's standard library, and the frontend is plain HTML/CSS/JavaScript. It is designed as a learning scaffold that can later be upgraded to React, Spring Boot, OCR, vector search, and Azure/OpenAI services.
 
@@ -79,6 +80,8 @@ export AZURE_DOCUMENT_INTELLIGENCE_API_VERSION="2024-11-30"
 
 The Azure adapter uses the Document Intelligence REST API. It submits the uploaded file, polls the returned operation URL, then stores extracted text by page. Keep Azure keys out of GitHub; use environment variables or a secrets manager.
 
+When `OCR_PROVIDER=azure`, local OCR fallback is disabled. If the Azure endpoint/key are missing or Azure returns an error, the upload is marked `needs_ocr` instead of using Tesseract silently.
+
 The answer generation layer lives in:
 
 ```text
@@ -120,6 +123,8 @@ Was temporary relief granted?
 ```
 
 The answer should cite both the uploaded sample document and the docket event when both sources match.
+
+PDF citations open in an in-app PDF.js viewer. The viewer jumps to the cited page, provides previous/next page controls, and overlays highlights for matching citation text. Searchable PDFs use PDF.js text positions. Azure OCR uploads also store word bounding polygons, so scanned/image-only PDF citations can fall back to OCR-coordinate highlights after the document is re-uploaded with Azure OCR enabled.
 
 For the legal reference demo, paste content from:
 

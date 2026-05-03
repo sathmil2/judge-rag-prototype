@@ -155,6 +155,26 @@ h2 {
   padding: 16px;
 }
 
+.config-banner {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--muted);
+  padding: 11px 12px;
+  font-size: 0.84rem;
+  font-weight: 800;
+}
+
+.config-banner.azure {
+  border-color: #8ab8a2;
+  color: #1f6f49;
+}
+
+.config-banner.local {
+  border-color: #d8bd82;
+  color: #7c540e;
+}
+
 .dropzone input {
   padding: 10px;
   background: #f6faf9;
@@ -315,16 +335,96 @@ dialog::backdrop {
   padding: 12px 14px;
 }
 
+.viewer-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .viewer-header button {
   min-height: 36px;
   padding: 0 12px;
   background: var(--ink);
 }
 
+.viewer-header .secondary-button {
+  background: transparent;
+  color: var(--accent-strong);
+}
+
+.viewer-header .secondary-button:hover {
+  background: #edf6f4;
+}
+
+.viewer-header button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+#pageIndicator {
+  color: var(--muted);
+  font-size: 0.84rem;
+  font-weight: 800;
+  min-width: 96px;
+  text-align: center;
+}
+
+.viewer-status {
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 0.88rem;
+  padding: 10px 14px;
+}
+
+.pdf-viewer {
+  display: grid;
+  justify-items: center;
+  height: calc(100% - 103px);
+  overflow: auto;
+  background: #dfe7e5;
+  padding: 16px;
+}
+
+.pdf-page {
+  position: relative;
+  background: white;
+  box-shadow: 0 12px 30px rgba(22, 24, 24, 0.2);
+}
+
+#pdfCanvas {
+  display: block;
+}
+
+.highlight-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.pdf-highlight {
+  position: absolute;
+  border-radius: 3px;
+  background: rgba(255, 214, 66, 0.45);
+  box-shadow: 0 0 0 1px rgba(185, 131, 37, 0.35);
+}
+
+.pdf-highlight.ocr-highlight {
+  background: rgba(13, 107, 111, 0.24);
+  box-shadow: 0 0 0 1px rgba(13, 107, 111, 0.45);
+}
+
 #viewerFrame {
   width: 100%;
   height: calc(100% - 61px);
   border: 0;
+}
+
+#viewerFrame[hidden],
+.pdf-viewer[hidden],
+.viewer-status[hidden],
+button[hidden],
+span[hidden] {
+  display: none;
 }
 
 .empty {

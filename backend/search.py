@@ -79,6 +79,10 @@ def build_search_records(index: dict, case_number: str, source_filter: str) -> l
                 "pageNumber": chunk["pageNumber"],
                 "viewerUrl": chunk["viewerUrl"],
                 "sourceFile": chunk["sourceFile"],
+                "pageWidth": chunk.get("pageWidth"),
+                "pageHeight": chunk.get("pageHeight"),
+                "pageUnit": chunk.get("pageUnit", ""),
+                "ocrWords": chunk.get("ocrWords") or [],
             })
 
     if source_filter in {"all", "events"}:
@@ -232,6 +236,10 @@ def build_citations(results: list[SearchResult]) -> list[dict]:
             "sourceType": source["sourceType"],
             "sourceLabel": source["sourceLabel"],
             "sourceText": source["chunkText"],
+            "pageWidth": source.get("pageWidth"),
+            "pageHeight": source.get("pageHeight"),
+            "pageUnit": source.get("pageUnit", ""),
+            "ocrHighlights": build_ocr_highlights(snippet, source.get("ocrWords") or []),
             "score": result.score,
             "keywordScore": result.keywordScore,
             "vectorScore": result.vectorScore,
@@ -240,3 +248,21 @@ def build_citations(results: list[SearchResult]) -> list[dict]:
             "verified": snippet[:80].lower() in " ".join(source["chunkText"].split()).lower(),
         })
     return citations
+
+
+def build_ocr_highlights(snippet: str, words: list[dict]) -> list[dict]:
+    terms = set(tokenize(snippet))
+    highlights = []
+    for word in words:
+        word_terms = set(tokenize(str(word.get("text", ""))))
+        if not word_terms or not terms.intersection(word_terms):
+            continue
+        polygon = word.get("polygon") or []
+        if not polygon:
+            continue
+        highlights.append({
+            "text": word.get("text", ""),
+            "polygon": polygon,
+            "confidence": word.get("confidence"),
+        })
+    return highlights[:120]

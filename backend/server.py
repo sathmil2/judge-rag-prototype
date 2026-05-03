@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import mimetypes
+import os
 import re
 import shutil
 import threading
@@ -14,6 +15,10 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
+
+from config import load_dotenv
+
+load_dotenv()
 
 from answer import generate_answer
 from ocr import extract_document
@@ -39,6 +44,10 @@ class PageChunk:
     chunkText: str
     sourceFile: str
     viewerUrl: str
+    pageWidth: float | None = None
+    pageHeight: float | None = None
+    pageUnit: str = ""
+    ocrWords: list[dict] | None = None
 
 
 @dataclass
@@ -137,6 +146,19 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({"legalReferences": read_index()["legalReferences"]})
             return
 
+        if path == "/api/config":
+            self.send_json({
+                "ocrProvider": os.getenv("OCR_PROVIDER", "local").strip().lower(),
+                "azureDocumentIntelligence": {
+                    "endpointConfigured": bool(os.getenv("AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT", "").strip()),
+                    "keyConfigured": bool(os.getenv("AZURE_DOCUMENT_INTELLIGENCE_KEY", "").strip()),
+                    "model": os.getenv("AZURE_DOCUMENT_INTELLIGENCE_MODEL", "prebuilt-read"),
+                    "apiVersion": os.getenv("AZURE_DOCUMENT_INTELLIGENCE_API_VERSION", "2024-11-30"),
+                    "localFallbackDisabled": os.getenv("OCR_PROVIDER", "local").strip().lower() == "azure",
+                },
+            })
+            return
+
         if path.startswith("/uploads/"):
             self.serve_file(UPLOAD_DIR / path.removeprefix("/uploads/"))
             return
@@ -227,6 +249,10 @@ class Handler(BaseHTTPRequestHandler):
                 chunkText=page_text,
                 sourceFile=saved_name,
                 viewerUrl=viewer_url,
+                pageWidth=page.pageWidth,
+                pageHeight=page.pageHeight,
+                pageUnit=page.pageUnit,
+                ocrWords=page.ocrWords,
             )))
 
         write_index(index)
@@ -314,7 +340,7 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         index = read_index()
-        results = retrieve_sources(index, question, case_number, source_filter)
+        results = retrieve_sources(index, question, case_number, source_filter, limit=10)
         citations = build_citations(results)
         validation = validate_citations(citations)
         answer_result = generate_answer(question, citations, source_filter)
